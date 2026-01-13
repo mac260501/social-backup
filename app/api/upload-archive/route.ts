@@ -159,63 +159,35 @@ export async function POST(request: Request) {
       console.log('Profile already exists')
     }
 
-    // Insert backups
-    const backups = []
-    
-    if (tweets.length > 0) {
-      backups.push({
-        user_id: userUuid,
-        backup_type: 'tweets',
-        data: { tweets, count: tweets.length },
-      })
-    }
-    
-    if (followers.length > 0) {
-      backups.push({
-        user_id: userUuid,
-        backup_type: 'followers',
-        data: { followers, count: followers.length },
-      })
-    }
-    
-    if (following.length > 0) {
-      backups.push({
-        user_id: userUuid,
-        backup_type: 'following',
-        data: { following, count: following.length },
-      })
+    // Create single backup snapshot with all data
+    const backupSnapshot = {
+      user_id: userUuid,
+      backup_name: null, // Can be set by user later
+      data: {
+        tweets,
+        followers,
+        following,
+        likes,
+        direct_messages: directMessages,
+      },
+      stats,
+      file_size: buffer.length,
+      archive_date: new Date().toISOString(),
     }
 
-    if (likes.length > 0) {
-      backups.push({
-        user_id: userUuid,
-        backup_type: 'likes',
-        data: { likes, count: likes.length },
-      })
+    console.log('Creating backup snapshot')
+
+    const { data: insertedBackup, error: backupError } = await supabase
+      .from('backups')
+      .insert(backupSnapshot)
+      .select()
+      .single()
+
+    if (backupError) {
+      console.error('Failed to insert backup:', backupError)
+      throw new Error(`Failed to insert backup: ${backupError.message}`)
     }
-
-    if (directMessages.length > 0) {
-      backups.push({
-        user_id: userUuid,
-        backup_type: 'direct_messages',
-        data: { conversations: directMessages, count: stats.dms },
-      })
-    }
-
-    console.log('Attempting to insert', backups.length, 'backup records')
-
-    if (backups.length > 0) {
-      const { data: insertedBackups, error: backupError } = await supabase
-        .from('backups')
-        .insert(backups)
-        .select()
-
-      if (backupError) {
-        console.error('Failed to insert backups:', backupError)
-        throw new Error(`Failed to insert backups: ${backupError.message}`)
-      }
-      console.log('Successfully inserted', insertedBackups?.length || 0, 'backups')
-    }
+    console.log('Successfully created backup snapshot:', insertedBackup?.id)
 
     return NextResponse.json({
       success: true,
