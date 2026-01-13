@@ -46,6 +46,30 @@ export default function BackupsPage() {
     link.click()
   }
 
+  const deleteBackup = async (backupId: string, backupType: string) => {
+    if (!confirm(`Are you sure you want to delete this ${backupType.replace('_', ' ')} backup? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/backups/delete?backupId=${encodeURIComponent(backupId)}`, {
+        method: 'DELETE',
+      })
+
+      const result = await response.json()
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete backup')
+      }
+
+      // Refresh the backups list
+      fetchBackups()
+    } catch (error) {
+      console.error('Error deleting backup:', error)
+      alert('Failed to delete backup. Please try again.')
+    }
+  }
+
   if (status === 'loading' || loading) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>
   }
@@ -129,6 +153,12 @@ export default function BackupsPage() {
                       className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
                     >
                       Download
+                    </button>
+                    <button
+                      onClick={() => deleteBackup(backup.id, backup.backup_type)}
+                      className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>
