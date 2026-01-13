@@ -9,12 +9,30 @@ export default function Dashboard() {
   const router = useRouter()
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<any>(null)
+  const [backupsCount, setBackupsCount] = useState<number>(0)
+  const [loadingBackups, setLoadingBackups] = useState(true)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/')
+    } else if (status === 'authenticated' && session?.user?.id) {
+      fetchBackupsCount()
     }
-  }, [status, router])
+  }, [status, session, router])
+
+  const fetchBackupsCount = async () => {
+    try {
+      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
+      const result = await response.json()
+      if (result.success) {
+        setBackupsCount(result.backups?.length || 0)
+      }
+    } catch (error) {
+      console.error('Error fetching backups count:', error)
+    } finally {
+      setLoadingBackups(false)
+    }
+  }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -36,6 +54,11 @@ export default function Dashboard() {
 
       const data = await response.json()
       setUploadResult(data)
+
+      // Refresh backups count after successful upload
+      if (data.success) {
+        fetchBackupsCount()
+      }
     } catch (error) {
       setUploadResult({ success: false, error: 'Failed to upload' })
     } finally {
@@ -57,12 +80,20 @@ export default function Dashboard() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             <h1 className="text-xl font-semibold text-gray-900">Social Backup</h1>
-            <button
-              onClick={() => signOut({ callbackUrl: '/' })}
-              className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
-            >
-              Sign out
-            </button>
+            <div className="flex items-center space-x-4">
+              <button
+                onClick={() => router.push('/dashboard/backups')}
+                className="px-4 py-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+              >
+                View Backups
+              </button>
+              <button
+                onClick={() => signOut({ callbackUrl: '/' })}
+                className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </div>
       </nav>
@@ -75,7 +106,26 @@ export default function Dashboard() {
               Free Tier
             </span>
           </div>
-          
+
+          {!loadingBackups && backupsCount > 0 && (
+            <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-blue-900">Your Backups</h3>
+                  <p className="text-sm text-blue-700 mt-1">
+                    You have {backupsCount} backup{backupsCount !== 1 ? 's' : ''} saved
+                  </p>
+                </div>
+                <button
+                  onClick={() => router.push('/dashboard/backups')}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition text-sm font-medium"
+                >
+                  View All →
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="border-t pt-6 mt-6">
           <h3 className="text-lg font-semibold mb-4 text-gray-900">📥 Backup Your Twitter Data</h3>
             
