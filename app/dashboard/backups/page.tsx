@@ -3,19 +3,6 @@
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
-import { createHash } from 'crypto'
-
-function createUuidFromString(str: string): string {
-  const hash = createHash('sha256').update(str).digest('hex')
-  return [
-    hash.substring(0, 8),
-    hash.substring(8, 12),
-    hash.substring(12, 16),
-    hash.substring(16, 20),
-    hash.substring(20, 32),
-  ].join('-')
-}
 
 export default function BackupsPage() {
   const { data: session, status } = useSession()
@@ -34,17 +21,14 @@ export default function BackupsPage() {
 
   const fetchBackups = async () => {
     try {
-      const supabase = createClient()
-      const userUuid = createUuidFromString(session?.user?.id || '')
-      
-      const { data, error } = await supabase
-        .from('backups')
-        .select('*')
-        .eq('user_id', userUuid)
-        .order('backed_up_at', { ascending: false })
+      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
+      const result = await response.json()
 
-      if (error) throw error
-      setBackups(data || [])
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch backups')
+      }
+
+      setBackups(result.backups || [])
     } catch (error) {
       console.error('Error fetching backups:', error)
     } finally {
