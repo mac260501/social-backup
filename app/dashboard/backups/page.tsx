@@ -1,21 +1,8 @@
 'use client'
 
-import { useSession } from 'next-auth/react'
+import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
-import { createHash } from 'crypto'
-
-function createUuidFromString(str: string): string {
-  const hash = createHash('sha256').update(str).digest('hex')
-  return [
-    hash.substring(0, 8),
-    hash.substring(8, 12),
-    hash.substring(12, 16),
-    hash.substring(16, 20),
-    hash.substring(20, 32),
-  ].join('-')
-}
 
 export default function BackupsPage() {
   const { data: session, status } = useSession()
@@ -34,17 +21,14 @@ export default function BackupsPage() {
 
   const fetchBackups = async () => {
     try {
-      const supabase = createClient()
-      const userUuid = createUuidFromString(session?.user?.id || '')
-      
-      const { data, error } = await supabase
-        .from('backups')
-        .select('*')
-        .eq('user_id', userUuid)
-        .order('backed_up_at', { ascending: false })
+      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
+      const result = await response.json()
 
-      if (error) throw error
-      setBackups(data || [])
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch backups')
+      }
+
+      setBackups(result.backups || [])
     } catch (error) {
       console.error('Error fetching backups:', error)
     } finally {
@@ -62,6 +46,30 @@ export default function BackupsPage() {
     link.click()
   }
 
+  const deleteBackup = async (backupId: string, backupType: string) => {
+    if (!confirm(`Are you sure you want to delete this ${backupType.replace('_', ' ')} backup? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/backups/delete?backupId=${encodeURIComponent(backupId)}`, {
+        method: 'DELETE',
+      })
+
+      const result = await response.json()
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete backup')
+      }
+
+      // Refresh the backups list
+      fetchBackups()
+    } catch (error) {
+      console.error('Error deleting backup:', error)
+      alert('Failed to delete backup. Please try again.')
+    }
+  }
+
   if (status === 'loading' || loading) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>
   }
@@ -73,13 +81,27 @@ export default function BackupsPage() {
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center space-x-8">
               <h1 className="text-xl font-semibold text-gray-900">Social Backup</h1>
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="text-sm text-gray-600 hover:text-gray-900"
-              >
-                ← Back to Dashboard
-              </button>
+              <div className="flex space-x-1">
+                <button
+                  onClick={() => router.push('/dashboard')}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+                >
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => router.push('/dashboard/backups')}
+                  className="px-4 py-2 text-sm font-medium text-blue-600 border-b-2 border-blue-600"
+                >
+                  Backups
+                </button>
+              </div>
             </div>
+            <button
+              onClick={() => signOut({ callbackUrl: '/' })}
+              className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </nav>
@@ -131,6 +153,12 @@ export default function BackupsPage() {
                       className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
                     >
                       Download
+                    </button>
+                    <button
+                      onClick={() => deleteBackup(backup.id, backup.backup_type)}
+                      className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>
