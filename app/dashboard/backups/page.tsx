@@ -1,6 +1,6 @@
 'use client'
 
-import { useSession } from 'next-auth/react'
+import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 
@@ -57,13 +57,27 @@ export default function BackupsPage() {
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center space-x-8">
               <h1 className="text-xl font-semibold text-gray-900">Social Backup</h1>
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="text-sm text-gray-600 hover:text-gray-900"
-              >
-                ← Back to Dashboard
-              </button>
+              <div className="flex space-x-1">
+                <button
+                  onClick={() => router.push('/dashboard')}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+                >
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => router.push('/dashboard/backups')}
+                  className="px-4 py-2 text-sm font-medium text-blue-600 border-b-2 border-blue-600"
+                >
+                  Backups
+                </button>
+              </div>
             </div>
+            <button
+              onClick={() => signOut({ callbackUrl: '/' })}
+              className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </nav>

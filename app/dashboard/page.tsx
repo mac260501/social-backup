@@ -79,21 +79,29 @@ export default function Dashboard() {
       <nav className="bg-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
-            <h1 className="text-xl font-semibold text-gray-900">Social Backup</h1>
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => router.push('/dashboard/backups')}
-                className="px-4 py-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                View Backups
-              </button>
-              <button
-                onClick={() => signOut({ callbackUrl: '/' })}
-                className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
-              >
-                Sign out
-              </button>
+            <div className="flex items-center space-x-8">
+              <h1 className="text-xl font-semibold text-gray-900">Social Backup</h1>
+              <div className="flex space-x-1">
+                <button
+                  onClick={() => router.push('/dashboard')}
+                  className="px-4 py-2 text-sm font-medium text-blue-600 border-b-2 border-blue-600"
+                >
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => router.push('/dashboard/backups')}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+                >
+                  Backups
+                </button>
+              </div>
             </div>
+            <button
+              onClick={() => signOut({ callbackUrl: '/' })}
+              className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </nav>
