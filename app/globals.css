@@ -17,6 +17,15 @@
     --background: #0a0a0a;
     --foreground: #ededed;
   }
+  
+  /* Force light backgrounds to stay light in dark mode */
+  .bg-white {
+    background-color: #ffffff !important;
+  }
+  
+  .bg-gray-50 {
+    background-color: #f9fafb !important;
+  }
 }
 
 body {
