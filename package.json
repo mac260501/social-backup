@@ -13,6 +13,7 @@
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.90.1",
     "adm-zip": "^0.5.16",
+    "apify-client": "^2.21.0",
     "axios": "^1.13.2",
     "cheerio": "^1.1.2",
     "next": "16.1.1",

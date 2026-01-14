@@ -11,6 +11,9 @@ export default function Dashboard() {
   const [uploadResult, setUploadResult] = useState<any>(null)
   const [backupsCount, setBackupsCount] = useState<number>(0)
   const [loadingBackups, setLoadingBackups] = useState(true)
+  const [scraping, setScraping] = useState(false)
+  const [scrapeResult, setScrapeResult] = useState<any>(null)
+  const [maxTweets, setMaxTweets] = useState(1000)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -63,6 +66,39 @@ export default function Dashboard() {
       setUploadResult({ success: false, error: 'Failed to upload' })
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handleScrapeNow = async () => {
+    if (!session?.user?.username) return
+
+    setScraping(true)
+    setScrapeResult(null)
+
+    try {
+      const response = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: session.user.username,
+          maxTweets: maxTweets,
+          userId: session.user.id,
+        }),
+      })
+
+      const data = await response.json()
+      setScrapeResult(data)
+
+      // Refresh backups count after successful scrape
+      if (data.success) {
+        fetchBackupsCount()
+      }
+    } catch (error) {
+      setScrapeResult({ success: false, error: 'Failed to scrape Twitter data' })
+    } finally {
+      setScraping(false)
     }
   }
 
@@ -254,6 +290,130 @@ export default function Dashboard() {
                     <div>
                       <h4 className="text-lg font-semibold text-red-900">Upload Failed</h4>
                       <p className="text-sm text-red-700">{uploadResult.error}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Automated Scraping Section */}
+          <div className="border-t pt-6 mt-6">
+            <h3 className="text-lg font-semibold mb-4 text-gray-900">🚀 Automated Backup (Scraping)</h3>
+
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-6">
+              <h4 className="font-semibold text-purple-900 mb-2">Instant Twitter Scraping</h4>
+              <p className="text-sm text-purple-800 mb-3">
+                Skip the wait! Scrape your Twitter data instantly without requesting an archive.
+              </p>
+
+              <div className="mt-4 p-3 bg-purple-100 rounded">
+                <p className="text-sm font-semibold text-purple-900">✨ What gets scraped:</p>
+                <div className="grid grid-cols-2 gap-2 mt-2 text-sm text-purple-800">
+                  <div>✓ Your latest tweets</div>
+                  <div>✓ Your followers</div>
+                  <div>✓ Your following</div>
+                  <div>✗ Likes (archive only)</div>
+                </div>
+              </div>
+
+              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                <p className="text-sm text-yellow-800">
+                  <span className="font-semibold">💰 Cost:</span> ~$0.40 per 1,000 tweets scraped
+                </p>
+              </div>
+            </div>
+
+            <div className="border-2 border-dashed border-purple-300 rounded-lg p-8 text-center">
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Number of tweets to scrape:
+                </label>
+                <input
+                  type="number"
+                  value={maxTweets}
+                  onChange={(e) => setMaxTweets(parseInt(e.target.value) || 1000)}
+                  min="100"
+                  max="3200"
+                  step="100"
+                  disabled={scraping}
+                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-center"
+                />
+              </div>
+
+              <button
+                onClick={handleScrapeNow}
+                disabled={scraping}
+                className={`inline-flex items-center px-6 py-3 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition ${scraping ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                {scraping ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Scraping in Progress...
+                  </>
+                ) : (
+                  '⚡ Scrape Now'
+                )}
+              </button>
+              <p className="text-sm text-gray-500 mt-2">
+                Estimated cost: ${((maxTweets / 1000) * 0.4).toFixed(2)}
+              </p>
+            </div>
+
+            {scrapeResult && (
+              <div className={`mt-6 p-6 rounded-lg ${scrapeResult.success ? 'bg-green-50 border-2 border-green-200' : 'bg-red-50 border-2 border-red-200'}`}>
+                {scrapeResult.success ? (
+                  <>
+                    <div className="flex items-center mb-4">
+                      <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center text-white text-xl mr-3">
+                        ✓
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-semibold text-green-900">{scrapeResult.message}</h4>
+                        <p className="text-sm text-green-700">Your data has been scraped and backed up!</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                      <div className="bg-white rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-blue-600">{scrapeResult.data.tweets.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 mt-1">Tweets</div>
+                      </div>
+                      <div className="bg-white rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-purple-600">{scrapeResult.data.followers.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 mt-1">Followers</div>
+                      </div>
+                      <div className="bg-white rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-green-600">{scrapeResult.data.following.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 mt-1">Following</div>
+                      </div>
+                      <div className="bg-white rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-orange-600">${scrapeResult.data.cost.toFixed(2)}</div>
+                        <div className="text-sm text-gray-600 mt-1">Cost</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 text-center">
+                      <button
+                        onClick={() => router.push('/dashboard/backups')}
+                        className="px-6 py-3 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition"
+                      >
+                        View All Backups →
+                      </button>
+                    </div>
+                  </>
+
+                ) : (
+                  <div className="flex items-center">
+                    <div className="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center text-white text-xl mr-3">
+                      ✗
+                    </div>
+                    <div>
+                      <h4 className="text-lg font-semibold text-red-900">Scraping Failed</h4>
+                      <p className="text-sm text-red-700">{scrapeResult.error}</p>
                     </div>
                   </div>
                 )}
