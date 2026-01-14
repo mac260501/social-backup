@@ -30,10 +30,10 @@ export class ApifyProvider implements TwitterProvider {
       const run = await this.client.actor(this.tweetActorId).call({
         searchTerms: [`from:${username}`],
         maxTweets: maxTweets,
-        // Only get tweets, not replies or retweets for now
+        // Get all content: tweets, replies, and retweets
         getTweets: true,
-        getReplies: false,
-        getRetweets: false,
+        getReplies: true,
+        getRetweets: true,
       })
 
       // Check if the run failed
