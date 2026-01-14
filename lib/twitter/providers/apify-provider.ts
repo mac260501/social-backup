@@ -108,13 +108,15 @@ export class ApifyProvider implements TwitterProvider {
       }
 
       // Transform Apify format to our standard format
-      const followers: Follower[] = items.map((item: any) => ({
-        accountId: item.id_str || item.id || '',
-        userLink: item.screen_name ? `https://twitter.com/${item.screen_name}` : '',
-        follower: {
-          accountId: item.id_str || item.id || '',
-        },
-      }))
+      // Filter out: empty items, items without userName, and the first item (user's own profile)
+      const followers: Follower[] = items
+        .slice(1) // Skip first item (user's own profile)
+        .filter((item: any) => item && item.userName && item.id)
+        .map((item: any) => ({
+          username: item.userName,
+          user_id: item.id?.toString(),
+          name: item.name || item.userName,
+        }))
 
       console.log(`[Apify] Successfully scraped ${followers.length} followers`)
       return followers
@@ -154,13 +156,15 @@ export class ApifyProvider implements TwitterProvider {
       }
 
       // Transform Apify format to our standard format
-      const following: Following[] = items.map((item: any) => ({
-        accountId: item.id_str || item.id || '',
-        userLink: item.screen_name ? `https://twitter.com/${item.screen_name}` : '',
-        following: {
-          accountId: item.id_str || item.id || '',
-        },
-      }))
+      // Filter out: empty items, items without userName, and the first item (user's own profile)
+      const following: Following[] = items
+        .slice(1) // Skip first item (user's own profile)
+        .filter((item: any) => item && item.userName && item.id)
+        .map((item: any) => ({
+          username: item.userName,
+          user_id: item.id?.toString(),
+          name: item.name || item.userName,
+        }))
 
       console.log(`[Apify] Successfully scraped ${following.length} following`)
       return following
