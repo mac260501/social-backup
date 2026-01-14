@@ -311,10 +311,14 @@ export default function Dashboard() {
                 <p className="text-sm font-semibold text-purple-900">✨ What gets scraped:</p>
                 <div className="grid grid-cols-2 gap-2 mt-2 text-sm text-purple-800">
                   <div>✓ Your latest tweets</div>
-                  <div>✓ Your followers</div>
-                  <div>✓ Your following</div>
+                  <div>✗ Followers (archive only)</div>
+                  <div>✗ Following (archive only)</div>
                   <div>✗ Likes (archive only)</div>
+                  <div>✗ DMs (archive only)</div>
                 </div>
+                <p className="text-xs text-purple-700 mt-2 italic">
+                  Note: The apidojo/tweet-scraper only supports tweets. For complete data, use archive upload.
+                </p>
               </div>
 
               <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded">
@@ -391,22 +395,14 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                    <div className="grid grid-cols-2 gap-4 mt-4">
                       <div className="bg-white rounded-lg p-4 text-center">
                         <div className="text-3xl font-bold text-blue-600">{scrapeResult.data.tweets.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Tweets</div>
-                      </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-purple-600">{scrapeResult.data.followers.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Followers</div>
-                      </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-green-600">{scrapeResult.data.following.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Following</div>
+                        <div className="text-sm text-gray-600 mt-1">Tweets Scraped</div>
                       </div>
                       <div className="bg-white rounded-lg p-4 text-center">
                         <div className="text-3xl font-bold text-orange-600">${scrapeResult.data.cost.toFixed(2)}</div>
-                        <div className="text-sm text-gray-600 mt-1">Cost</div>
+                        <div className="text-sm text-gray-600 mt-1">Total Cost</div>
                       </div>
                     </div>
 

@@ -83,38 +83,11 @@ export class ApifyProvider implements TwitterProvider {
     }
 
     console.log(`[Apify] Scraping followers for @${username}`)
+    console.warn(`[Apify] The apidojo/tweet-scraper actor does not support followers scraping`)
 
-    try {
-      // Run the Apify tweet-scraper actor for followers
-      const run = await this.client.actor(this.actorId).call({
-        searchTerms: [`from:${username}`],
-        maxTweets: 1, // Just get profile data
-        getFollowers: true,
-        maxFollowers: 1000, // Limit to prevent excessive costs
-      })
-
-      // Get dataset items
-      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
-
-      // Extract followers from the first item (profile data)
-      const followers: Follower[] = []
-      if (items.length > 0 && items[0].followers) {
-        items[0].followers.forEach((follower: any) => {
-          followers.push({
-            username: follower.screen_name || follower.username,
-            user_id: follower.id_str || follower.id,
-            name: follower.name,
-          })
-        })
-      }
-
-      console.log(`[Apify] Successfully scraped ${followers.length} followers`)
-      return followers
-    } catch (error) {
-      console.error('[Apify] Error scraping followers:', error)
-      // Don't throw, just return empty array (followers might not be critical)
-      return []
-    }
+    // This actor doesn't support followers scraping
+    // Would need a different actor like "apify/twitter-profile-scraper"
+    return []
   }
 
   async scrapeFollowing(username: string): Promise<Following[]> {
@@ -123,61 +96,27 @@ export class ApifyProvider implements TwitterProvider {
     }
 
     console.log(`[Apify] Scraping following for @${username}`)
+    console.warn(`[Apify] The apidojo/tweet-scraper actor does not support following scraping`)
 
-    try {
-      // Run the Apify tweet-scraper actor for following
-      const run = await this.client.actor(this.actorId).call({
-        searchTerms: [`from:${username}`],
-        maxTweets: 1, // Just get profile data
-        getFollowing: true,
-        maxFollowing: 1000, // Limit to prevent excessive costs
-      })
-
-      // Get dataset items
-      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
-
-      // Extract following from the first item (profile data)
-      const following: Following[] = []
-      if (items.length > 0 && items[0].following) {
-        items[0].following.forEach((user: any) => {
-          following.push({
-            username: user.screen_name || user.username,
-            user_id: user.id_str || user.id,
-            name: user.name,
-          })
-        })
-      }
-
-      console.log(`[Apify] Successfully scraped ${following.length} following`)
-      return following
-    } catch (error) {
-      console.error('[Apify] Error scraping following:', error)
-      // Don't throw, just return empty array (following might not be critical)
-      return []
-    }
+    // This actor doesn't support following scraping
+    // Would need a different actor like "apify/twitter-profile-scraper"
+    return []
   }
 
   async scrapeAll(username: string, maxTweets: number = 3200): Promise<TwitterScrapeResult> {
     const startTime = Date.now()
-    
+
     console.log(`[Apify] Starting full scrape for @${username}`)
 
-    // Scrape all data
-    const [tweets, followers, following] = await Promise.all([
-      this.scrapeTweets(username, maxTweets),
-      this.scrapeFollowers(username),
-      this.scrapeFollowing(username),
-    ])
+    // Only scrape tweets - this actor doesn't support followers/following
+    const tweets = await this.scrapeTweets(username, maxTweets)
+    const followers: Follower[] = []
+    const following: Following[] = []
 
     // Calculate cost based on Apify pricing
     // Base cost: ~$0.40 per 1,000 tweets
     const tweetCost = (tweets.length / 1000) * 0.4
-    
-    // Followers/following have minimal cost, estimate ~$0.10 total
-    const followerCost = 0.05
-    const followingCost = 0.05
-    
-    const totalCost = tweetCost + followerCost + followingCost
+    const totalCost = tweetCost
 
     return {
       tweets,
@@ -189,8 +128,8 @@ export class ApifyProvider implements TwitterProvider {
         tweets_count: tweets.length,
         breakdown: {
           tweets: parseFloat(tweetCost.toFixed(2)),
-          followers: followerCost,
-          following: followingCost,
+          followers: 0,
+          following: 0,
         },
       },
       metadata: {
