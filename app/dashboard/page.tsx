@@ -317,9 +317,23 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded">
+                <p className="text-sm text-red-800">
+                  <span className="font-semibold">⚠️ Requirements:</span> Requires a paid Apify plan ($49/month). Free tier not supported.
+                </p>
+                <a
+                  href="https://apify.com/pricing"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-red-700 underline hover:text-red-900 mt-1 inline-block"
+                >
+                  View Apify pricing →
+                </a>
+              </div>
+
               <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
                 <p className="text-sm text-yellow-800">
-                  <span className="font-semibold">💰 Cost:</span> ~$0.40 per 1,000 tweets scraped
+                  <span className="font-semibold">💰 Cost:</span> Apify plan ($49/mo) + ~$0.40 per 1,000 tweets scraped
                 </p>
               </div>
             </div>

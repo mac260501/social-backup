@@ -35,8 +35,19 @@ export class ApifyProvider implements TwitterProvider {
         getRetweets: false,
       })
 
+      // Check if the run failed
+      if (run.status === 'FAILED') {
+        throw new Error('Apify run failed. You may need a paid Apify plan to use this actor. Please check: https://apify.com/pricing')
+      }
+
       // Get dataset items (tweets)
       const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
+
+      // If no items returned, check if it's a plan limitation
+      if (!items || items.length === 0) {
+        console.warn('[Apify] No tweets returned - this may be due to Apify plan limitations')
+        throw new Error('No tweets returned. This actor requires a paid Apify plan. Visit: https://apify.com/pricing')
+      }
 
       // Transform Apify format to our standard format
       const tweets: Tweet[] = items.map((item: any) => ({
@@ -56,6 +67,12 @@ export class ApifyProvider implements TwitterProvider {
       return tweets
     } catch (error) {
       console.error('[Apify] Error scraping tweets:', error)
+
+      // Check for specific Apify errors
+      if (error instanceof Error && error.message.includes('Free Plan')) {
+        throw new Error('Apify scraping requires a paid plan ($49/month). Please upgrade at https://apify.com/pricing or use the free archive upload method instead.')
+      }
+
       throw new Error(`Failed to scrape tweets: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
   }
