@@ -79,19 +79,95 @@ export class ApifyProvider implements TwitterProvider {
   }
 
   async scrapeFollowers(username: string): Promise<Follower[]> {
-    // Note: Reliable followers scraping is very difficult due to Twitter's restrictions
-    // Most Apify actors don't support this reliably without specific Twitter API access
-    console.log(`[Apify] Followers scraping not reliably supported - returning empty array`)
-    console.warn('[Apify] For followers data, please use the archive upload method')
-    return []
+    if (!this.isConfigured()) {
+      throw new Error('Apify API key not configured')
+    }
+
+    console.log(`[Apify] Scraping followers for @${username}`)
+
+    try {
+      // Run the Apify user-scraper actor with getFollowers enabled
+      const run = await this.client.actor(this.userActorId).call({
+        twitterHandles: [username],
+        getFollowers: true,
+        getFollowing: false,  // Only get followers, not following
+        maxItems: 1000,  // Limit to reasonable number
+      })
+
+      // Check if the run failed
+      if (run.status === 'FAILED') {
+        throw new Error('Apify run failed. You may need a paid Apify plan to use this actor.')
+      }
+
+      // Get dataset items (followers)
+      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
+
+      if (!items || items.length === 0) {
+        console.warn('[Apify] No followers returned')
+        return []
+      }
+
+      // Transform Apify format to our standard format
+      const followers: Follower[] = items.map((item: any) => ({
+        accountId: item.id_str || item.id || '',
+        userLink: item.screen_name ? `https://twitter.com/${item.screen_name}` : '',
+        follower: {
+          accountId: item.id_str || item.id || '',
+        },
+      }))
+
+      console.log(`[Apify] Successfully scraped ${followers.length} followers`)
+      return followers
+    } catch (error) {
+      console.error('[Apify] Error scraping followers:', error)
+      throw new Error(`Failed to scrape followers: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   async scrapeFollowing(username: string): Promise<Following[]> {
-    // Note: Reliable following scraping is very difficult due to Twitter's restrictions
-    // Most Apify actors don't support this reliably without specific Twitter API access
-    console.log(`[Apify] Following scraping not reliably supported - returning empty array`)
-    console.warn('[Apify] For following data, please use the archive upload method')
-    return []
+    if (!this.isConfigured()) {
+      throw new Error('Apify API key not configured')
+    }
+
+    console.log(`[Apify] Scraping following for @${username}`)
+
+    try {
+      // Run the Apify user-scraper actor with getFollowing enabled
+      const run = await this.client.actor(this.userActorId).call({
+        twitterHandles: [username],
+        getFollowers: false,  // Only get following, not followers
+        getFollowing: true,
+        maxItems: 1000,  // Limit to reasonable number
+      })
+
+      // Check if the run failed
+      if (run.status === 'FAILED') {
+        throw new Error('Apify run failed. You may need a paid Apify plan to use this actor.')
+      }
+
+      // Get dataset items (following)
+      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
+
+      if (!items || items.length === 0) {
+        console.warn('[Apify] No following returned')
+        return []
+      }
+
+      // Transform Apify format to our standard format
+      const following: Following[] = items.map((item: any) => ({
+        accountId: item.id_str || item.id || '',
+        userLink: item.screen_name ? `https://twitter.com/${item.screen_name}` : '',
+        following: {
+          accountId: item.id_str || item.id || '',
+        },
+      }))
+
+      console.log(`[Apify] Successfully scraped ${following.length} following`)
+      return following
+    } catch (error) {
+      console.error('[Apify] Error scraping following:', error)
+      throw new Error(`Failed to scrape following: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   async scrapeAll(username: string, maxTweets: number = 3200): Promise<TwitterScrapeResult> {
@@ -99,15 +175,18 @@ export class ApifyProvider implements TwitterProvider {
 
     console.log(`[Apify] Starting full scrape for @${username}`)
 
-    // Only scrape tweets - followers/following not reliably supported
+    // Scrape all data: tweets, followers, and following
     const tweets = await this.scrapeTweets(username, maxTweets)
-    const followers: Follower[] = []
-    const following: Following[] = []
+    const followers = await this.scrapeFollowers(username)
+    const following = await this.scrapeFollowing(username)
 
     // Calculate cost based on Apify pricing
     // Tweet scraper: ~$0.40 per 1,000 tweets
+    // User scraper: ~$0.40 per 1,000 users (for followers/following)
     const tweetCost = (tweets.length / 1000) * 0.4
-    const totalCost = tweetCost
+    const followerCost = (followers.length / 1000) * 0.4
+    const followingCost = (following.length / 1000) * 0.4
+    const totalCost = tweetCost + followerCost + followingCost
 
     return {
       tweets,
@@ -119,8 +198,8 @@ export class ApifyProvider implements TwitterProvider {
         tweets_count: tweets.length,
         breakdown: {
           tweets: parseFloat(tweetCost.toFixed(2)),
-          followers: 0,
-          following: 0,
+          followers: parseFloat(followerCost.toFixed(2)),
+          following: parseFloat(followingCost.toFixed(2)),
         },
       },
       metadata: {
