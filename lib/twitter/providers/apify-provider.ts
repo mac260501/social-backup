@@ -108,9 +108,9 @@ export class ApifyProvider implements TwitterProvider {
       }
 
       // Transform Apify format to our standard format
-      // Filter out: empty items, items without userName, and the first item (user's own profile)
+      // Filter out: empty items or items without userName/id
+      // Note: Unlike following, followers API doesn't include user's own profile
       const followers: Follower[] = items
-        .slice(1) // Skip first item (user's own profile)
         .filter((item: any) => item && item.userName && item.id)
         .map((item: any) => ({
           username: item.userName,
