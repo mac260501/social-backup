@@ -34,7 +34,7 @@ export async function GET(request: Request) {
       .from('backups')
       .select('*')
       .eq('user_id', userUuid)
-      .order('backed_up_at', { ascending: false })
+      .order('uploaded_at', { ascending: false })
 
     if (error) {
       console.error('Failed to fetch backups:', error)

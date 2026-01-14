@@ -1,0 +1,57 @@
+// Shared types for all Twitter providers
+
+export interface Tweet {
+  id: string
+  text: string
+  created_at: string
+  retweet_count?: number
+  favorite_count?: number
+  reply_count?: number
+  author?: {
+    username: string
+    name: string
+  }
+}
+
+export interface Follower {
+  username: string
+  user_id?: string
+  name?: string
+}
+
+export interface Following {
+  username: string
+  user_id?: string
+  name?: string
+}
+
+export interface Like {
+  tweet_id: string
+  full_text?: string
+  liked_at?: string
+}
+
+export interface TwitterScrapeCost {
+  provider: 'apify' | 'twitter-api'
+  total_cost: number // in USD
+  tweets_count: number
+  breakdown?: {
+    tweets?: number
+    followers?: number
+    following?: number
+  }
+}
+
+export interface TwitterScrapeResult {
+  tweets: Tweet[]
+  followers: Follower[]
+  following: Following[]
+  cost: TwitterScrapeCost
+  metadata: {
+    username: string
+    scraped_at: string
+    is_partial: boolean // true if hit rate limits
+    tweets_requested: number
+    tweets_received: number
+  }
+}
