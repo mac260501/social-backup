@@ -46,13 +46,28 @@ export async function POST(request: Request) {
     }
 
     console.log('Processing archive for:', username)
+    console.log('File size:', file.size, 'bytes')
 
     const userUuid = createUuidFromString(userId)
 
     // Read the ZIP file
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
-    const zip = new AdmZip(buffer)
+
+    // Try to open the ZIP file with error handling
+    let zip: AdmZip
+    try {
+      zip = new AdmZip(buffer)
+      console.log('ZIP file loaded successfully')
+
+      // List all entries for debugging
+      const entries = zip.getEntries()
+      console.log(`ZIP contains ${entries.length} entries`)
+      console.log('Sample entries:', entries.slice(0, 10).map(e => e.entryName))
+    } catch (zipError) {
+      console.error('Failed to open ZIP file:', zipError)
+      throw new Error('Invalid or corrupted ZIP file. Please ensure you uploaded a valid Twitter archive.')
+    }
 
     const stats = {
       tweets: 0,
@@ -64,105 +79,136 @@ export async function POST(request: Request) {
 
     // Extract tweets
     let tweets = []
-    const tweetsEntry = zip.getEntry('data/tweets.js') || zip.getEntry('data/tweet.js')
-    if (tweetsEntry) {
-      const tweetsContent = tweetsEntry.getData().toString('utf8')
-      const tweetsData = parseTwitterJSON(tweetsContent)
-      tweets = tweetsData.map((item: any) => ({
-        id: item.tweet?.id_str,
-        text: item.tweet?.full_text || item.tweet?.text,
-        created_at: item.tweet?.created_at,
-        retweet_count: item.tweet?.retweet_count,
-        favorite_count: item.tweet?.favorite_count,
-      })).filter((t: any) => t.id)
-      stats.tweets = tweets.length
+    try {
+      const tweetsEntry = zip.getEntry('data/tweets.js') || zip.getEntry('data/tweet.js')
+      if (tweetsEntry) {
+        console.log('Extracting tweets from:', tweetsEntry.entryName)
+        const tweetsContent = tweetsEntry.getData().toString('utf8')
+        const tweetsData = parseTwitterJSON(tweetsContent)
+        tweets = tweetsData.map((item: any) => ({
+          id: item.tweet?.id_str,
+          text: item.tweet?.full_text || item.tweet?.text,
+          created_at: item.tweet?.created_at,
+          retweet_count: item.tweet?.retweet_count,
+          favorite_count: item.tweet?.favorite_count,
+        })).filter((t: any) => t.id)
+        stats.tweets = tweets.length
+        console.log(`Extracted ${tweets.length} tweets`)
+      }
+    } catch (error) {
+      console.error('Error extracting tweets:', error)
+      // Continue processing other data even if tweets fail
     }
 
     // Extract followers
     let followers = []
-    const followersEntry = zip.getEntry('data/follower.js')
-    if (followersEntry) {
-      const followersContent = followersEntry.getData().toString('utf8')
-      const followersData = parseTwitterJSON(followersContent)
-      followers = followersData.map((item: any) => {
-        const userLink = item.follower?.userLink || ''
-        // Extract username from URL or use account ID
-        let username = item.follower?.accountId
+    try {
+      const followersEntry = zip.getEntry('data/follower.js')
+      if (followersEntry) {
+        console.log('Extracting followers from:', followersEntry.entryName)
+        const followersContent = followersEntry.getData().toString('utf8')
+        const followersData = parseTwitterJSON(followersContent)
+        followers = followersData.map((item: any) => {
+          const userLink = item.follower?.userLink || ''
+          // Extract username from URL or use account ID
+          let username = item.follower?.accountId
 
-        // Try to extract from different URL formats
-        if (userLink.includes('/intent/user?user_id=')) {
-          username = userLink.split('user_id=')[1] || username
-        } else if (userLink.includes('twitter.com/')) {
-          username = userLink.split('/').pop() || username
-        }
+          // Try to extract from different URL formats
+          if (userLink.includes('/intent/user?user_id=')) {
+            username = userLink.split('user_id=')[1] || username
+          } else if (userLink.includes('twitter.com/')) {
+            username = userLink.split('/').pop() || username
+          }
 
-        return { username }
-      }).filter((f: any) => f.username)
-      stats.followers = followers.length
+          return { username }
+        }).filter((f: any) => f.username)
+        stats.followers = followers.length
+        console.log(`Extracted ${followers.length} followers`)
+      }
+    } catch (error) {
+      console.error('Error extracting followers:', error)
     }
 
     // Extract following
     let following = []
-    const followingEntry = zip.getEntry('data/following.js')
-    if (followingEntry) {
-      const followingContent = followingEntry.getData().toString('utf8')
-      const followingData = parseTwitterJSON(followingContent)
-      following = followingData.map((item: any) => {
-        const userLink = item.following?.userLink || ''
-        // Extract username from URL or use account ID
-        let username = item.following?.accountId
+    try {
+      const followingEntry = zip.getEntry('data/following.js')
+      if (followingEntry) {
+        console.log('Extracting following from:', followingEntry.entryName)
+        const followingContent = followingEntry.getData().toString('utf8')
+        const followingData = parseTwitterJSON(followingContent)
+        following = followingData.map((item: any) => {
+          const userLink = item.following?.userLink || ''
+          // Extract username from URL or use account ID
+          let username = item.following?.accountId
 
-        // Try to extract from different URL formats
-        if (userLink.includes('/intent/user?user_id=')) {
-          username = userLink.split('user_id=')[1] || username
-        } else if (userLink.includes('twitter.com/')) {
-          username = userLink.split('/').pop() || username
-        }
+          // Try to extract from different URL formats
+          if (userLink.includes('/intent/user?user_id=')) {
+            username = userLink.split('user_id=')[1] || username
+          } else if (userLink.includes('twitter.com/')) {
+            username = userLink.split('/').pop() || username
+          }
 
-        return { username }
-      }).filter((f: any) => f.username)
-      stats.following = following.length
+          return { username }
+        }).filter((f: any) => f.username)
+        stats.following = following.length
+        console.log(`Extracted ${following.length} following`)
+      }
+    } catch (error) {
+      console.error('Error extracting following:', error)
     }
 
     // Extract likes
     let likes = []
-    const likesEntry = zip.getEntry('data/like.js')
-    if (likesEntry) {
-      const likesContent = likesEntry.getData().toString('utf8')
-      const likesData = parseTwitterJSON(likesContent)
-      likes = likesData.map((item: any) => ({
-        tweet_id: item.like?.tweetId,
-        full_text: item.like?.fullText,
-      })).filter((l: any) => l.tweet_id)
-      stats.likes = likes.length
+    try {
+      const likesEntry = zip.getEntry('data/like.js')
+      if (likesEntry) {
+        console.log('Extracting likes from:', likesEntry.entryName)
+        const likesContent = likesEntry.getData().toString('utf8')
+        const likesData = parseTwitterJSON(likesContent)
+        likes = likesData.map((item: any) => ({
+          tweet_id: item.like?.tweetId,
+          full_text: item.like?.fullText,
+        })).filter((l: any) => l.tweet_id)
+        stats.likes = likes.length
+        console.log(`Extracted ${likes.length} likes`)
+      }
+    } catch (error) {
+      console.error('Error extracting likes:', error)
     }
 
     // Extract direct messages
     let directMessages = []
-    const dmsEntry = zip.getEntry('data/direct-messages.js')
-    if (dmsEntry) {
-      const dmsContent = dmsEntry.getData().toString('utf8')
-      const dmsData = parseTwitterJSON(dmsContent)
-      directMessages = dmsData.map((item: any) => {
-        const messages = item.dmConversation?.messages || []
+    try {
+      const dmsEntry = zip.getEntry('data/direct-messages.js')
+      if (dmsEntry) {
+        console.log('Extracting DMs from:', dmsEntry.entryName)
+        const dmsContent = dmsEntry.getData().toString('utf8')
+        const dmsData = parseTwitterJSON(dmsContent)
+        directMessages = dmsData.map((item: any) => {
+          const messages = item.dmConversation?.messages || []
 
-        // Extract text from messageCreate structure
-        const messageTexts = messages.map((msg: any) => ({
-          text: msg.messageCreate?.text || '',
-          created_at: msg.messageCreate?.createdAt,
-          sender_id: msg.messageCreate?.senderId,
-          recipient_id: msg.messageCreate?.recipientId,
-        }))
+          // Extract text from messageCreate structure
+          const messageTexts = messages.map((msg: any) => ({
+            text: msg.messageCreate?.text || '',
+            created_at: msg.messageCreate?.createdAt,
+            sender_id: msg.messageCreate?.senderId,
+            recipient_id: msg.messageCreate?.recipientId,
+          }))
 
-        return {
-          conversation_id: item.dmConversation?.conversationId,
-          messages: messageTexts,
-          message_count: messages.length,
-        }
-      }).filter((dm: any) => dm.conversation_id)
+          return {
+            conversation_id: item.dmConversation?.conversationId,
+            messages: messageTexts,
+            message_count: messages.length,
+          }
+        }).filter((dm: any) => dm.conversation_id)
 
-      // Update stats to count actual messages
-      stats.dms = directMessages.reduce((sum: number, dm: any) => sum + dm.message_count, 0)
+        // Update stats to count actual messages
+        stats.dms = directMessages.reduce((sum: number, dm: any) => sum + dm.message_count, 0)
+        console.log(`Extracted ${directMessages.length} DM conversations with ${stats.dms} total messages`)
+      }
+    } catch (error) {
+      console.error('Error extracting direct messages:', error)
     }
 
     console.log('Extracted stats:', stats)
