@@ -84,9 +84,20 @@ export async function POST(request: Request) {
     if (followersEntry) {
       const followersContent = followersEntry.getData().toString('utf8')
       const followersData = parseTwitterJSON(followersContent)
-      followers = followersData.map((item: any) => ({
-        username: item.follower?.userLink?.split('/').pop() || item.follower?.accountId,
-      })).filter((f: any) => f.username)
+      followers = followersData.map((item: any) => {
+        const userLink = item.follower?.userLink || ''
+        // Extract username from URL or use account ID
+        let username = item.follower?.accountId
+
+        // Try to extract from different URL formats
+        if (userLink.includes('/intent/user?user_id=')) {
+          username = userLink.split('user_id=')[1] || username
+        } else if (userLink.includes('twitter.com/')) {
+          username = userLink.split('/').pop() || username
+        }
+
+        return { username }
+      }).filter((f: any) => f.username)
       stats.followers = followers.length
     }
 
@@ -96,9 +107,20 @@ export async function POST(request: Request) {
     if (followingEntry) {
       const followingContent = followingEntry.getData().toString('utf8')
       const followingData = parseTwitterJSON(followingContent)
-      following = followingData.map((item: any) => ({
-        username: item.following?.userLink?.split('/').pop() || item.following?.accountId,
-      })).filter((f: any) => f.username)
+      following = followingData.map((item: any) => {
+        const userLink = item.following?.userLink || ''
+        // Extract username from URL or use account ID
+        let username = item.following?.accountId
+
+        // Try to extract from different URL formats
+        if (userLink.includes('/intent/user?user_id=')) {
+          username = userLink.split('user_id=')[1] || username
+        } else if (userLink.includes('twitter.com/')) {
+          username = userLink.split('/').pop() || username
+        }
+
+        return { username }
+      }).filter((f: any) => f.username)
       stats.following = following.length
     }
 
@@ -121,11 +143,26 @@ export async function POST(request: Request) {
     if (dmsEntry) {
       const dmsContent = dmsEntry.getData().toString('utf8')
       const dmsData = parseTwitterJSON(dmsContent)
-      directMessages = dmsData.map((item: any) => ({
-        conversation_id: item.dmConversation?.conversationId,
-        messages: item.dmConversation?.messages?.length || 0,
-      })).filter((dm: any) => dm.conversation_id)
-      stats.dms = directMessages.reduce((sum: number, dm: any) => sum + dm.messages, 0)
+      directMessages = dmsData.map((item: any) => {
+        const messages = item.dmConversation?.messages || []
+
+        // Extract text from messageCreate structure
+        const messageTexts = messages.map((msg: any) => ({
+          text: msg.messageCreate?.text || '',
+          created_at: msg.messageCreate?.createdAt,
+          sender_id: msg.messageCreate?.senderId,
+          recipient_id: msg.messageCreate?.recipientId,
+        }))
+
+        return {
+          conversation_id: item.dmConversation?.conversationId,
+          messages: messageTexts,
+          message_count: messages.length,
+        }
+      }).filter((dm: any) => dm.conversation_id)
+
+      // Update stats to count actual messages
+      stats.dms = directMessages.reduce((sum: number, dm: any) => sum + dm.message_count, 0)
     }
 
     console.log('Extracted stats:', stats)
