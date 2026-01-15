@@ -116,6 +116,7 @@ export class ApifyProvider implements TwitterProvider {
           username: item.userName,
           user_id: item.id?.toString(),
           name: item.name || item.userName,
+          userLink: `https://twitter.com/intent/user?user_id=${item.id}`,
         }))
 
       console.log(`[Apify] Successfully scraped ${followers.length} followers`)
@@ -164,6 +165,7 @@ export class ApifyProvider implements TwitterProvider {
           username: item.userName,
           user_id: item.id?.toString(),
           name: item.name || item.userName,
+          userLink: `https://twitter.com/intent/user?user_id=${item.id}`,
         }))
 
       console.log(`[Apify] Successfully scraped ${following.length} following`)
