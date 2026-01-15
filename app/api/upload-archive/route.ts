@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createHash } from 'crypto'
-import JSZip from 'jszip'
+import yauzl from 'yauzl'
+import { promisify } from 'util'
+
+const openZip = promisify(yauzl.open)
 
 // Use service role for backend operations (bypasses RLS)
 const supabase = createClient(
@@ -21,7 +24,6 @@ function createUuidFromString(str: string): string {
 }
 
 function parseTwitterJSON(content: string) {
-  // Twitter archives have format: window.YTD.tweets.part0 = [...]
   const jsonMatch = content.match(/=\s*(\[[\s\S]*\])/)?.[1]
   if (jsonMatch) {
     try {
@@ -32,6 +34,33 @@ function parseTwitterJSON(content: string) {
     }
   }
   return []
+}
+
+// Helper to extract file from yauzl
+function extractFileFromZip(zipfile: any, fileName: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    zipfile.on('entry', (entry: any) => {
+      if (entry.fileName === fileName) {
+        zipfile.openReadStream(entry, (err: any, readStream: any) => {
+          if (err) {
+            console.error(`Error reading ${fileName}:`, err)
+            resolve(null)
+            return
+          }
+          
+          const chunks: Buffer[] = []
+          readStream.on('data', (chunk: Buffer) => chunks.push(chunk))
+          readStream.on('end', () => {
+            const content = Buffer.concat(chunks).toString('utf8')
+            resolve(content)
+          })
+          readStream.on('error', () => resolve(null))
+        })
+      }
+    })
+    
+    zipfile.on('end', () => resolve(null))
+  })
 }
 
 export async function POST(request: Request) {
@@ -46,243 +75,180 @@ export async function POST(request: Request) {
     }
 
     console.log('Processing archive for:', username)
-    console.log('File size:', file.size, 'bytes')
 
     const userUuid = createUuidFromString(userId)
-
-    // Read the ZIP file
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
-    // Try to open the ZIP file with error handling
-    let zip: JSZip
+    // Write buffer to temp file for yauzl
+    const tmpPath = `/tmp/archive-${Date.now()}.zip`
+    const fs = require('fs')
+    fs.writeFileSync(tmpPath, buffer)
+
+    // Extract files
+    const files: { [key: string]: string } = {}
+    
     try {
-      zip = await JSZip.loadAsync(buffer)
-      console.log('ZIP file loaded successfully')
-
-      // List all entries for debugging
-      const fileNames = Object.keys(zip.files)
-      console.log(`ZIP contains ${fileNames.length} entries`)
-      console.log('Sample entries:', fileNames.slice(0, 10))
-    } catch (zipError) {
-      console.error('Failed to open ZIP file:', zipError)
-      throw new Error('Invalid or corrupted ZIP file. Please ensure you uploaded a valid Twitter archive.')
-    }
-
-    const stats = {
-      tweets: 0,
-      followers: 0,
-      following: 0,
-      likes: 0,
-      dms: 0,
-    }
-
-    // Extract tweets
-    let tweets = []
-    try {
-      const tweetsFile = zip.file('data/tweets.js') || zip.file('data/tweet.js')
-      if (tweetsFile) {
-        console.log('Extracting tweets from:', tweetsFile.name)
-        const tweetsContent = await tweetsFile.async('string')
-        const tweetsData = parseTwitterJSON(tweetsContent)
-        tweets = tweetsData.map((item: any) => ({
-          id: item.tweet?.id_str,
-          text: item.tweet?.full_text || item.tweet?.text,
-          created_at: item.tweet?.created_at,
-          retweet_count: item.tweet?.retweet_count,
-          favorite_count: item.tweet?.favorite_count,
-        })).filter((t: any) => t.id)
-        stats.tweets = tweets.length
-        console.log(`Extracted ${tweets.length} tweets`)
-      }
-    } catch (error) {
-      console.error('Error extracting tweets:', error)
-      // Continue processing other data even if tweets fail
-    }
-
-    // Extract followers
-    let followers = []
-    try {
-      const followersFile = zip.file('data/follower.js')
-      if (followersFile) {
-        console.log('Extracting followers from:', followersFile.name)
-        const followersContent = await followersFile.async('string')
-        const followersData = parseTwitterJSON(followersContent)
-        followers = followersData.map((item: any) => {
-          const userLink = item.follower?.userLink || ''
-          // Extract username from URL or use account ID
-          let username = item.follower?.accountId
-
-          // Try to extract from different URL formats
-          if (userLink.includes('/intent/user?user_id=')) {
-            username = userLink.split('user_id=')[1] || username
-          } else if (userLink.includes('twitter.com/')) {
-            username = userLink.split('/').pop() || username
-          }
-
-          return { username }
-        }).filter((f: any) => f.username)
-        stats.followers = followers.length
-        console.log(`Extracted ${followers.length} followers`)
-      }
-    } catch (error) {
-      console.error('Error extracting followers:', error)
-    }
-
-    // Extract following
-    let following = []
-    try {
-      const followingFile = zip.file('data/following.js')
-      if (followingFile) {
-        console.log('Extracting following from:', followingFile.name)
-        const followingContent = await followingFile.async('string')
-        const followingData = parseTwitterJSON(followingContent)
-        following = followingData.map((item: any) => {
-          const userLink = item.following?.userLink || ''
-          // Extract username from URL or use account ID
-          let username = item.following?.accountId
-
-          // Try to extract from different URL formats
-          if (userLink.includes('/intent/user?user_id=')) {
-            username = userLink.split('user_id=')[1] || username
-          } else if (userLink.includes('twitter.com/')) {
-            username = userLink.split('/').pop() || username
-          }
-
-          return { username }
-        }).filter((f: any) => f.username)
-        stats.following = following.length
-        console.log(`Extracted ${following.length} following`)
-      }
-    } catch (error) {
-      console.error('Error extracting following:', error)
-    }
-
-    // Extract likes
-    let likes = []
-    try {
-      const likesFile = zip.file('data/like.js')
-      if (likesFile) {
-        console.log('Extracting likes from:', likesFile.name)
-        const likesContent = await likesFile.async('string')
-        const likesData = parseTwitterJSON(likesContent)
-        likes = likesData.map((item: any) => ({
-          tweet_id: item.like?.tweetId,
-          full_text: item.like?.fullText,
-        })).filter((l: any) => l.tweet_id)
-        stats.likes = likes.length
-        console.log(`Extracted ${likes.length} likes`)
-      }
-    } catch (error) {
-      console.error('Error extracting likes:', error)
-    }
-
-    // Extract direct messages
-    let directMessages = []
-    try {
-      const dmsFile = zip.file('data/direct-messages.js')
-      if (dmsFile) {
-        console.log('Extracting DMs from:', dmsFile.name)
-        const dmsContent = await dmsFile.async('string')
-        const dmsData = parseTwitterJSON(dmsContent)
-        directMessages = dmsData.map((item: any) => {
-          const messages = item.dmConversation?.messages || []
-
-          // Extract text from messageCreate structure
-          const messageTexts = messages.map((msg: any) => ({
-            text: msg.messageCreate?.text || '',
-            created_at: msg.messageCreate?.createdAt,
-            sender_id: msg.messageCreate?.senderId,
-            recipient_id: msg.messageCreate?.recipientId,
-          }))
-
-          return {
-            conversation_id: item.dmConversation?.conversationId,
-            messages: messageTexts,
-            message_count: messages.length,
-          }
-        }).filter((dm: any) => dm.conversation_id)
-
-        // Update stats to count actual messages
-        stats.dms = directMessages.reduce((sum: number, dm: any) => sum + dm.message_count, 0)
-        console.log(`Extracted ${directMessages.length} DM conversations with ${stats.dms} total messages`)
-      }
-    } catch (error) {
-      console.error('Error extracting direct messages:', error)
-    }
-
-    console.log('Extracted stats:', stats)
-
-    // Save to Supabase - ensure profile exists first
-    const { data: existingProfile, error: profileCheckError } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('id', userUuid)
-      .single()
-
-    if (!existingProfile) {
-      console.log('Creating new profile for:', username)
-      const { data: newProfile, error: profileInsertError } = await supabase
-        .from('profiles')
-        .insert({
-          id: userUuid,
-          twitter_username: username,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+      const zipfile: any = await new Promise((resolve, reject) => {
+        yauzl.open(tmpPath, { lazyEntries: true, autoClose: false }, (err, zipfile) => {
+          if (err) reject(err)
+          else resolve(zipfile)
         })
-        .select()
-        .single()
+      })
 
-      if (profileInsertError) {
-        console.error('Failed to create profile:', profileInsertError)
-        throw new Error(`Failed to create profile: ${profileInsertError.message}`)
+      // Get all entries first
+      const entries: any[] = []
+      await new Promise<void>((resolve) => {
+        zipfile.on('entry', (entry: any) => {
+          entries.push(entry)
+          zipfile.readEntry()
+        })
+        zipfile.on('end', () => resolve())
+        zipfile.readEntry()
+      })
+
+      zipfile.close()
+
+      // Now extract the files we need
+      for (const fileName of ['data/tweets.js', 'data/tweet.js', 'data/follower.js', 'data/following.js', 'data/like.js', 'data/direct-messages.js']) {
+        const entry = entries.find(e => e.fileName === fileName)
+        if (entry) {
+          const zipfile2: any = await new Promise((resolve, reject) => {
+            yauzl.open(tmpPath, { lazyEntries: true }, (err, zf) => err ? reject(err) : resolve(zf))
+          })
+
+          const content = await new Promise<string>((resolve) => {
+            zipfile2.on('entry', (e: any) => {
+              if (e.fileName === fileName) {
+                zipfile2.openReadStream(e, (err: any, stream: any) => {
+                  if (err) {
+                    resolve('')
+                    return
+                  }
+                  const chunks: Buffer[] = []
+                  stream.on('data', (chunk: Buffer) => chunks.push(chunk))
+                  stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+                })
+              } else {
+                zipfile2.readEntry()
+              }
+            })
+            zipfile2.readEntry()
+          })
+
+          zipfile2.close()
+          if (content) {
+            files[fileName] = content
+            console.log(`Extracted ${fileName}`)
+          }
+        }
       }
-      console.log('Profile created successfully')
-    } else {
-      console.log('Profile already exists')
+
+      // Clean up temp file
+      fs.unlinkSync(tmpPath)
+    } catch (error) {
+      console.error('Error extracting ZIP:', error)
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
+      throw new Error('Failed to extract archive')
     }
 
-    // Create single backup snapshot with all data
-    const backupSnapshot = {
+    const stats = { tweets: 0, followers: 0, following: 0, likes: 0, dms: 0 }
+
+    // Process extracted files (same as before)
+    let tweets = []
+    const tweetsContent = files['data/tweets.js'] || files['data/tweet.js']
+    if (tweetsContent) {
+      const tweetsData = parseTwitterJSON(tweetsContent)
+      tweets = tweetsData.map((item: any) => ({
+        id: item.tweet?.id_str,
+        text: item.tweet?.full_text || item.tweet?.text,
+        created_at: item.tweet?.created_at,
+        retweet_count: item.tweet?.retweet_count,
+        favorite_count: item.tweet?.favorite_count,
+      })).filter((t: any) => t.id)
+      stats.tweets = tweets.length
+    }
+
+    let followers = []
+    if (files['data/follower.js']) {
+      const followersData = parseTwitterJSON(files['data/follower.js'])
+      followers = followersData.map((item: any) => {
+        const userLink = item.follower?.userLink || ''
+        let username = item.follower?.accountId
+        if (userLink.includes('/intent/user?user_id=')) username = userLink.split('user_id=')[1] || username
+        else if (userLink.includes('twitter.com/')) username = userLink.split('/').pop() || username
+        return { username }
+      }).filter((f: any) => f.username)
+      stats.followers = followers.length
+    }
+
+    let following = []
+    if (files['data/following.js']) {
+      const followingData = parseTwitterJSON(files['data/following.js'])
+      following = followingData.map((item: any) => {
+        const userLink = item.following?.userLink || ''
+        let username = item.following?.accountId
+        if (userLink.includes('/intent/user?user_id=')) username = userLink.split('user_id=')[1] || username
+        else if (userLink.includes('twitter.com/')) username = userLink.split('/').pop() || username
+        return { username }
+      }).filter((f: any) => f.username)
+      stats.following = following.length
+    }
+
+    let likes = []
+    if (files['data/like.js']) {
+      const likesData = parseTwitterJSON(files['data/like.js'])
+      likes = likesData.map((item: any) => ({
+        tweet_id: item.like?.tweetId,
+        full_text: item.like?.fullText,
+      })).filter((l: any) => l.tweet_id)
+      stats.likes = likes.length
+    }
+
+    let directMessages = []
+    if (files['data/direct-messages.js']) {
+      const dmsData = parseTwitterJSON(files['data/direct-messages.js'])
+      directMessages = dmsData.map((item: any) => {
+        const messages = item.dmConversation?.messages || []
+        const messageTexts = messages.map((msg: any) => ({
+          text: msg.messageCreate?.text || '',
+          created_at: msg.messageCreate?.createdAt,
+          sender_id: msg.messageCreate?.senderId,
+          recipient_id: msg.messageCreate?.recipientId,
+        }))
+        return {
+          conversation_id: item.dmConversation?.conversationId,
+          messages: messageTexts,
+          message_count: messages.length,
+        }
+      }).filter((dm: any) => dm.conversation_id)
+      stats.dms = directMessages.reduce((sum: number, dm: any) => sum + dm.message_count, 0)
+    }
+
+    console.log('Stats:', stats)
+
+    // Save to database
+    const { data: existingProfile } = await supabase.from('profiles').select('id').eq('id', userUuid).single()
+    if (!existingProfile) {
+      await supabase.from('profiles').insert({
+        id: userUuid,
+        twitter_username: username,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+    }
+
+    await supabase.from('backups').insert({
       user_id: userUuid,
-      backup_name: null, // Can be set by user later
-      data: {
-        tweets,
-        followers,
-        following,
-        likes,
-        direct_messages: directMessages,
-      },
+      data: { tweets, followers, following, likes, direct_messages: directMessages },
       stats,
       file_size: buffer.length,
       archive_date: new Date().toISOString(),
-    }
-
-    console.log('Creating backup snapshot')
-
-    const { data: insertedBackup, error: backupError } = await supabase
-      .from('backups')
-      .insert(backupSnapshot)
-      .select()
-      .single()
-
-    if (backupError) {
-      console.error('Failed to insert backup:', backupError)
-      throw new Error(`Failed to insert backup: ${backupError.message}`)
-    }
-    console.log('Successfully created backup snapshot:', insertedBackup?.id)
-
-    return NextResponse.json({
-      success: true,
-      message: 'Archive processed successfully!',
-      stats,
     })
 
+    return NextResponse.json({ success: true, message: 'Archive processed!', stats })
   } catch (error) {
-    console.error('Upload error:', error)
-    return NextResponse.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to process archive',
-    }, { status: 500 })
+    console.error('Error:', error)
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Failed' }, { status: 500 })
   }
 }
