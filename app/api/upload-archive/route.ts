@@ -173,12 +173,16 @@ export async function POST(request: Request) {
     if (files['data/follower.js']) {
       const followersData = parseTwitterJSON(files['data/follower.js'])
       followers = followersData.map((item: any) => {
+        const accountId = item.follower?.accountId
         const userLink = item.follower?.userLink || ''
-        let username = item.follower?.accountId
-        if (userLink.includes('/intent/user?user_id=')) username = userLink.split('user_id=')[1] || username
-        else if (userLink.includes('twitter.com/')) username = userLink.split('/').pop() || username
-        return { username }
-      }).filter((f: any) => f.username)
+
+        return {
+          user_id: accountId,
+          username: undefined,  // Not available in Twitter archives
+          name: undefined,      // Not available in Twitter archives
+          userLink: userLink || `https://twitter.com/intent/user?user_id=${accountId}`
+        }
+      }).filter((f: any) => f.user_id)
       stats.followers = followers.length
     }
 
@@ -186,12 +190,16 @@ export async function POST(request: Request) {
     if (files['data/following.js']) {
       const followingData = parseTwitterJSON(files['data/following.js'])
       following = followingData.map((item: any) => {
+        const accountId = item.following?.accountId
         const userLink = item.following?.userLink || ''
-        let username = item.following?.accountId
-        if (userLink.includes('/intent/user?user_id=')) username = userLink.split('user_id=')[1] || username
-        else if (userLink.includes('twitter.com/')) username = userLink.split('/').pop() || username
-        return { username }
-      }).filter((f: any) => f.username)
+
+        return {
+          user_id: accountId,
+          username: undefined,  // Not available in Twitter archives
+          name: undefined,      // Not available in Twitter archives
+          userLink: userLink || `https://twitter.com/intent/user?user_id=${accountId}`
+        }
+      }).filter((f: any) => f.user_id)
       stats.following = following.length
     }
 
@@ -210,12 +218,19 @@ export async function POST(request: Request) {
       const dmsData = parseTwitterJSON(files['data/direct-messages.js'])
       directMessages = dmsData.map((item: any) => {
         const messages = item.dmConversation?.messages || []
-        const messageTexts = messages.map((msg: any) => ({
-          text: msg.messageCreate?.text || '',
-          created_at: msg.messageCreate?.createdAt,
-          sender_id: msg.messageCreate?.senderId,
-          recipient_id: msg.messageCreate?.recipientId,
-        }))
+        const messageTexts = messages.map((msg: any) => {
+          const senderId = msg.messageCreate?.senderId
+          const recipientId = msg.messageCreate?.recipientId
+
+          return {
+            text: msg.messageCreate?.text || '',
+            created_at: msg.messageCreate?.createdAt,
+            sender_id: senderId,
+            recipient_id: recipientId,
+            senderLink: senderId ? `https://twitter.com/intent/user?user_id=${senderId}` : undefined,
+            recipientLink: recipientId ? `https://twitter.com/intent/user?user_id=${recipientId}` : undefined,
+          }
+        })
         return {
           conversation_id: item.dmConversation?.conversationId,
           messages: messageTexts,

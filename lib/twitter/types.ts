@@ -14,15 +14,17 @@ export interface Tweet {
 }
 
 export interface Follower {
-  username: string
-  user_id?: string
+  user_id: string
+  username?: string
   name?: string
+  userLink: string
 }
 
 export interface Following {
-  username: string
-  user_id?: string
+  user_id: string
+  username?: string
   name?: string
+  userLink: string
 }
 
 export interface Like {

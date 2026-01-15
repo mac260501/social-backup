@@ -214,7 +214,7 @@ export default function BackupsPage() {
                         </button>
                         {expandedSection === `${backup.id}-tweets` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded">
+                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.tweets.slice(0, 10), null, 2)}
                               {backup.data.tweets.length > 10 && `\n\n... and ${backup.data.tweets.length - 10} more`}
                             </pre>
@@ -239,7 +239,7 @@ export default function BackupsPage() {
                         </button>
                         {expandedSection === `${backup.id}-followers` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded">
+                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.followers.slice(0, 10), null, 2)}
                               {backup.data.followers.length > 10 && `\n\n... and ${backup.data.followers.length - 10} more`}
                             </pre>
@@ -264,7 +264,7 @@ export default function BackupsPage() {
                         </button>
                         {expandedSection === `${backup.id}-following` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded">
+                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.following.slice(0, 10), null, 2)}
                               {backup.data.following.length > 10 && `\n\n... and ${backup.data.following.length - 10} more`}
                             </pre>
@@ -289,7 +289,7 @@ export default function BackupsPage() {
                         </button>
                         {expandedSection === `${backup.id}-likes` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded">
+                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.likes.slice(0, 10), null, 2)}
                               {backup.data.likes.length > 10 && `\n\n... and ${backup.data.likes.length - 10} more`}
                             </pre>
@@ -314,7 +314,7 @@ export default function BackupsPage() {
                         </button>
                         {expandedSection === `${backup.id}-dms` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded">
+                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.direct_messages.slice(0, 5), null, 2)}
                               {backup.data.direct_messages.length > 5 && `\n\n... and ${backup.data.direct_messages.length - 5} more`}
                             </pre>
