@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createHash } from 'crypto'
-import AdmZip from 'adm-zip'
+import JSZip from 'jszip'
 
 // Use service role for backend operations (bypasses RLS)
 const supabase = createClient(
@@ -55,15 +55,15 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(bytes)
 
     // Try to open the ZIP file with error handling
-    let zip: AdmZip
+    let zip: JSZip
     try {
-      zip = new AdmZip(buffer)
+      zip = await JSZip.loadAsync(buffer)
       console.log('ZIP file loaded successfully')
 
       // List all entries for debugging
-      const entries = zip.getEntries()
-      console.log(`ZIP contains ${entries.length} entries`)
-      console.log('Sample entries:', entries.slice(0, 10).map(e => e.entryName))
+      const fileNames = Object.keys(zip.files)
+      console.log(`ZIP contains ${fileNames.length} entries`)
+      console.log('Sample entries:', fileNames.slice(0, 10))
     } catch (zipError) {
       console.error('Failed to open ZIP file:', zipError)
       throw new Error('Invalid or corrupted ZIP file. Please ensure you uploaded a valid Twitter archive.')
@@ -80,10 +80,10 @@ export async function POST(request: Request) {
     // Extract tweets
     let tweets = []
     try {
-      const tweetsEntry = zip.getEntry('data/tweets.js') || zip.getEntry('data/tweet.js')
-      if (tweetsEntry) {
-        console.log('Extracting tweets from:', tweetsEntry.entryName)
-        const tweetsContent = tweetsEntry.getData().toString('utf8')
+      const tweetsFile = zip.file('data/tweets.js') || zip.file('data/tweet.js')
+      if (tweetsFile) {
+        console.log('Extracting tweets from:', tweetsFile.name)
+        const tweetsContent = await tweetsFile.async('string')
         const tweetsData = parseTwitterJSON(tweetsContent)
         tweets = tweetsData.map((item: any) => ({
           id: item.tweet?.id_str,
@@ -103,10 +103,10 @@ export async function POST(request: Request) {
     // Extract followers
     let followers = []
     try {
-      const followersEntry = zip.getEntry('data/follower.js')
-      if (followersEntry) {
-        console.log('Extracting followers from:', followersEntry.entryName)
-        const followersContent = followersEntry.getData().toString('utf8')
+      const followersFile = zip.file('data/follower.js')
+      if (followersFile) {
+        console.log('Extracting followers from:', followersFile.name)
+        const followersContent = await followersFile.async('string')
         const followersData = parseTwitterJSON(followersContent)
         followers = followersData.map((item: any) => {
           const userLink = item.follower?.userLink || ''
@@ -132,10 +132,10 @@ export async function POST(request: Request) {
     // Extract following
     let following = []
     try {
-      const followingEntry = zip.getEntry('data/following.js')
-      if (followingEntry) {
-        console.log('Extracting following from:', followingEntry.entryName)
-        const followingContent = followingEntry.getData().toString('utf8')
+      const followingFile = zip.file('data/following.js')
+      if (followingFile) {
+        console.log('Extracting following from:', followingFile.name)
+        const followingContent = await followingFile.async('string')
         const followingData = parseTwitterJSON(followingContent)
         following = followingData.map((item: any) => {
           const userLink = item.following?.userLink || ''
@@ -161,10 +161,10 @@ export async function POST(request: Request) {
     // Extract likes
     let likes = []
     try {
-      const likesEntry = zip.getEntry('data/like.js')
-      if (likesEntry) {
-        console.log('Extracting likes from:', likesEntry.entryName)
-        const likesContent = likesEntry.getData().toString('utf8')
+      const likesFile = zip.file('data/like.js')
+      if (likesFile) {
+        console.log('Extracting likes from:', likesFile.name)
+        const likesContent = await likesFile.async('string')
         const likesData = parseTwitterJSON(likesContent)
         likes = likesData.map((item: any) => ({
           tweet_id: item.like?.tweetId,
@@ -180,10 +180,10 @@ export async function POST(request: Request) {
     // Extract direct messages
     let directMessages = []
     try {
-      const dmsEntry = zip.getEntry('data/direct-messages.js')
-      if (dmsEntry) {
-        console.log('Extracting DMs from:', dmsEntry.entryName)
-        const dmsContent = dmsEntry.getData().toString('utf8')
+      const dmsFile = zip.file('data/direct-messages.js')
+      if (dmsFile) {
+        console.log('Extracting DMs from:', dmsFile.name)
+        const dmsContent = await dmsFile.async('string')
         const dmsData = parseTwitterJSON(dmsContent)
         directMessages = dmsData.map((item: any) => {
           const messages = item.dmConversation?.messages || []
