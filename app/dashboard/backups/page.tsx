@@ -232,18 +232,18 @@ export default function BackupsPage() {
                       <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'followers')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
+                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
                         >
-                          <span className="font-semibold text-gray-900">
+                          <span className="font-semibold text-gray-900 dark:text-white">
                             Followers ({backup.data.followers.length})
                           </span>
-                          <span className="text-gray-500">
+                          <span className="text-gray-500 dark:text-gray-400">
                             {expandedSection === `${backup.id}-followers` ? '−' : '+'}
                           </span>
                         </button>
                         {expandedSection === `${backup.id}-followers` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
+                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.followers.slice(0, 10), null, 2)}
                               {backup.data.followers.length > 10 && `\n\n... and ${backup.data.followers.length - 10} more`}
                             </pre>
@@ -254,21 +254,21 @@ export default function BackupsPage() {
 
                     {/* Following Section */}
                     {backup.data?.following && backup.data.following.length > 0 && (
-                      <div className="border rounded-lg">
+                      <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'following')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
+                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
                         >
-                          <span className="font-semibold text-gray-900">
+                          <span className="font-semibold text-gray-900 dark:text-white">
                             Following ({backup.data.following.length})
                           </span>
-                          <span className="text-gray-500">
+                          <span className="text-gray-500 dark:text-gray-400">
                             {expandedSection === `${backup.id}-following` ? '−' : '+'}
                           </span>
                         </button>
                         {expandedSection === `${backup.id}-following` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
+                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.following.slice(0, 10), null, 2)}
                               {backup.data.following.length > 10 && `\n\n... and ${backup.data.following.length - 10} more`}
                             </pre>
@@ -279,21 +279,21 @@ export default function BackupsPage() {
 
                     {/* Likes Section */}
                     {backup.data?.likes && backup.data.likes.length > 0 && (
-                      <div className="border rounded-lg">
+                      <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'likes')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
+                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
                         >
-                          <span className="font-semibold text-gray-900">
+                          <span className="font-semibold text-gray-900 dark:text-white">
                             Likes ({backup.data.likes.length})
                           </span>
-                          <span className="text-gray-500">
+                          <span className="text-gray-500 dark:text-gray-400">
                             {expandedSection === `${backup.id}-likes` ? '−' : '+'}
                           </span>
                         </button>
                         {expandedSection === `${backup.id}-likes` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
+                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.likes.slice(0, 10), null, 2)}
                               {backup.data.likes.length > 10 && `\n\n... and ${backup.data.likes.length - 10} more`}
                             </pre>
@@ -304,21 +304,21 @@ export default function BackupsPage() {
 
                     {/* Direct Messages Section */}
                     {backup.data?.direct_messages && backup.data.direct_messages.length > 0 && (
-                      <div className="border rounded-lg">
+                      <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'dms')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
+                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
                         >
-                          <span className="font-semibold text-gray-900">
+                          <span className="font-semibold text-gray-900 dark:text-white">
                             Direct Messages ({backup.data.direct_messages.length} conversations)
                           </span>
-                          <span className="text-gray-500">
+                          <span className="text-gray-500 dark:text-gray-400">
                             {expandedSection === `${backup.id}-dms` ? '−' : '+'}
                           </span>
                         </button>
                         {expandedSection === `${backup.id}-dms` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
+                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.direct_messages.slice(0, 5), null, 2)}
                               {backup.data.direct_messages.length > 5 && `\n\n... and ${backup.data.direct_messages.length - 5} more`}
                             </pre>
