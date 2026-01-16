@@ -3,6 +3,7 @@
 import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { ThemeToggle } from '@/components/theme-toggle'
 
 export default function Dashboard() {
   const { data: session, status } = useSession()
@@ -111,58 +112,61 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <nav className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center space-x-8">
-              <h1 className="text-xl font-semibold text-gray-900">Social Backup</h1>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Social Backup</h1>
               <div className="flex space-x-1">
                 <button
                   onClick={() => router.push('/dashboard')}
-                  className="px-4 py-2 text-sm font-medium text-blue-600 border-b-2 border-blue-600"
+                  className="px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400"
                 >
                   Dashboard
                 </button>
                 <button
                   onClick={() => router.push('/dashboard/backups')}
-                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+                  className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
                 >
                   Backups
                 </button>
               </div>
             </div>
-            <button
-              onClick={() => signOut({ callbackUrl: '/' })}
-              className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
-            >
-              Sign out
-            </button>
+            <div className="flex items-center space-x-3">
+              <ThemeToggle />
+              <button
+                onClick={() => signOut({ callbackUrl: '/' })}
+                className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </div>
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg dark:shadow-gray-900/50 p-6">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Welcome back, @{session.user?.username}!</h2>
-            <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Welcome back, @{session.user?.username}!</h2>
+            <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 rounded-full text-sm font-medium">
               Free Tier
             </span>
           </div>
 
           {!loadingBackups && backupsCount > 0 && (
-            <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-blue-900">Your Backups</h3>
-                  <p className="text-sm text-blue-700 mt-1">
+                  <h3 className="text-lg font-semibold text-blue-900 dark:text-blue-300">Your Backups</h3>
+                  <p className="text-sm text-blue-700 dark:text-blue-400 mt-1">
                     You have {backupsCount} backup{backupsCount !== 1 ? 's' : ''} saved
                   </p>
                 </div>
                 <button
                   onClick={() => router.push('/dashboard/backups')}
-                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition text-sm font-medium"
+                  className="px-4 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition text-sm font-medium"
                 >
                   View All →
                 </button>
@@ -170,19 +174,19 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="border-t pt-6 mt-6">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900">📥 Backup Your Twitter Data</h3>
-            
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <h4 className="font-semibold text-blue-900 mb-2 font-bold">How to get your Twitter archive:</h4>
-            <ol className="list-decimal list-inside space-y-2 text-sm text-blue-800">
+          <div className="border-t dark:border-gray-700 pt-6 mt-6">
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">📥 Backup Your Twitter Data</h3>
+
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+            <h4 className="font-semibold text-blue-900 dark:text-blue-300 mb-2 font-bold">How to get your Twitter archive:</h4>
+            <ol className="list-decimal list-inside space-y-2 text-sm text-blue-800 dark:text-blue-400">
                 <li>
                   Go to{' '}
-                  <a 
-                    href="https://twitter.com/settings/download_your_data" 
+                  <a
+                    href="https://twitter.com/settings/download_your_data"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline font-semibold"
+                    className="underline font-semibold hover:text-blue-600 dark:hover:text-blue-300"
                   >
                     Twitter Settings → Download your data
                   </a>
@@ -191,10 +195,10 @@ export default function Dashboard() {
                 <li>Download the ZIP file from the email</li>
                 <li>Upload it here to back everything up!</li>
               </ol>
-              
-              <div className="mt-4 p-3 bg-blue-100 rounded">
-                <p className="text-sm font-semibold text-blue-900">✨ What gets backed up:</p>
-                <div className="grid grid-cols-2 gap-2 mt-2 text-sm text-blue-800">
+
+              <div className="mt-4 p-3 bg-blue-100 dark:bg-blue-900/30 rounded">
+                <p className="text-sm font-semibold text-blue-900 dark:text-blue-300">✨ What gets backed up:</p>
+                <div className="grid grid-cols-2 gap-2 mt-2 text-sm text-blue-800 dark:text-blue-400">
                   <div>✓ All your tweets</div>
                   <div>✓ All your media</div>
                   <div>✓ Your followers</div>
@@ -205,7 +209,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition">
+            <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center hover:border-blue-400 dark:hover:border-blue-500 transition">
               <input
                 type="file"
                 accept=".zip"
@@ -214,9 +218,9 @@ export default function Dashboard() {
                 className="hidden"
                 id="file-upload"
               />
-              <label 
+              <label
                 htmlFor="file-upload"
-                className={`cursor-pointer inline-flex items-center px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`cursor-pointer inline-flex items-center px-6 py-3 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 {uploading ? (
                   <>
@@ -230,66 +234,66 @@ export default function Dashboard() {
                   '📤 Upload Twitter Archive (.zip)'
                 )}
               </label>
-              <p className="text-sm text-gray-500 mt-2">
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
                 Your archive will be processed securely
               </p>
             </div>
 
             {uploadResult && (
-              <div className={`mt-6 p-6 rounded-lg ${uploadResult.success ? 'bg-green-50 border-2 border-green-200' : 'bg-red-50 border-2 border-red-200'}`}>
+              <div className={`mt-6 p-6 rounded-lg ${uploadResult.success ? 'bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800'}`}>
                 {uploadResult.success ? (
                   <>
                     <div className="flex items-center mb-4">
-                      <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center text-white text-xl mr-3">
+                      <div className="w-10 h-10 bg-green-500 dark:bg-green-600 rounded-full flex items-center justify-center text-white text-xl mr-3">
                         ✓
                       </div>
                       <div>
-                        <h4 className="text-lg font-semibold text-green-900">{uploadResult.message}</h4>
-                        <p className="text-sm text-green-700">Your data is now safely backed up!</p>
+                        <h4 className="text-lg font-semibold text-green-900 dark:text-green-300">{uploadResult.message}</h4>
+                        <p className="text-sm text-green-700 dark:text-green-400">Your data is now safely backed up!</p>
                       </div>
                     </div>
-                    
+
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-blue-600">{uploadResult.stats.tweets.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Tweets</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{uploadResult.stats.tweets.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">Tweets</div>
                       </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-purple-600">{uploadResult.stats.followers.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Followers</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-purple-600 dark:text-purple-400">{uploadResult.stats.followers.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">Followers</div>
                       </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-green-600">{uploadResult.stats.following.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Following</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-green-600 dark:text-green-400">{uploadResult.stats.following.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">Following</div>
                       </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-red-600">{uploadResult.stats.likes.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Likes</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-red-600 dark:text-red-400">{uploadResult.stats.likes.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">Likes</div>
                       </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-indigo-600">{uploadResult.stats.dms.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">DMs</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-indigo-600 dark:text-indigo-400">{uploadResult.stats.dms.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">DMs</div>
                       </div>
                     </div>
 
                     <div className="mt-6 text-center">
                       <button
                         onClick={() => router.push('/dashboard/backups')}
-                        className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
+                        className="px-6 py-3 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition"
                       >
                         View All Backups →
                       </button>
                     </div>
                   </>
-                  
+
                 ) : (
                   <div className="flex items-center">
-                    <div className="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center text-white text-xl mr-3">
+                    <div className="w-10 h-10 bg-red-500 dark:bg-red-600 rounded-full flex items-center justify-center text-white text-xl mr-3">
                       ✗
                     </div>
                     <div>
-                      <h4 className="text-lg font-semibold text-red-900">Upload Failed</h4>
-                      <p className="text-sm text-red-700">{uploadResult.error}</p>
+                      <h4 className="text-lg font-semibold text-red-900 dark:text-red-300">Upload Failed</h4>
+                      <p className="text-sm text-red-700 dark:text-red-400">{uploadResult.error}</p>
                     </div>
                   </div>
                 )}
@@ -298,33 +302,33 @@ export default function Dashboard() {
           </div>
 
           {/* Automated Scraping Section */}
-          <div className="border-t pt-6 mt-6">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900">🚀 Automated Backup (Scraping)</h3>
+          <div className="border-t dark:border-gray-700 pt-6 mt-6">
+            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">🚀 Automated Backup (Scraping)</h3>
 
-            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-6">
-              <h4 className="font-semibold text-purple-900 mb-2">Instant Twitter Scraping</h4>
-              <p className="text-sm text-purple-800 mb-3">
+            <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4 mb-6">
+              <h4 className="font-semibold text-purple-900 dark:text-purple-300 mb-2">Instant Twitter Scraping</h4>
+              <p className="text-sm text-purple-800 dark:text-purple-400 mb-3">
                 Skip the wait! Scrape your Twitter data instantly without requesting an archive.
               </p>
 
-              <div className="mt-4 p-3 bg-purple-100 rounded">
-                <p className="text-sm font-semibold text-purple-900">✨ What gets scraped:</p>
-                <div className="grid grid-cols-2 gap-2 mt-2 text-sm text-purple-800">
+              <div className="mt-4 p-3 bg-purple-100 dark:bg-purple-900/30 rounded">
+                <p className="text-sm font-semibold text-purple-900 dark:text-purple-300">✨ What gets scraped:</p>
+                <div className="grid grid-cols-2 gap-2 mt-2 text-sm text-purple-800 dark:text-purple-400">
                   <div>✓ Your latest tweets</div>
                   <div>✓ Your followers</div>
                   <div>✓ Your following</div>
                   <div>✗ Likes (archive only)</div>
                   <div>✗ DMs (archive only)</div>
                 </div>
-                <p className="text-xs text-purple-700 mt-2 italic">
+                <p className="text-xs text-purple-700 dark:text-purple-400 mt-2 italic">
                   Note: For complete history including likes and DMs, use archive upload.
                 </p>
               </div>
             </div>
 
-            <div className="border-2 border-dashed border-purple-300 rounded-lg p-8 text-center">
+            <div className="border-2 border-dashed border-purple-300 dark:border-purple-700 rounded-lg p-8 text-center">
               <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Number of tweets to scrape:
                 </label>
                 <input
@@ -335,14 +339,14 @@ export default function Dashboard() {
                   max="3200"
                   step="100"
                   disabled={scraping}
-                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-center"
+                  className="w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg text-center"
                 />
               </div>
 
               <button
                 onClick={handleScrapeNow}
                 disabled={scraping}
-                className={`inline-flex items-center px-6 py-3 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition ${scraping ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`inline-flex items-center px-6 py-3 bg-purple-500 dark:bg-purple-600 text-white rounded-lg hover:bg-purple-600 dark:hover:bg-purple-700 transition ${scraping ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 {scraping ? (
                   <>
@@ -359,38 +363,38 @@ export default function Dashboard() {
             </div>
 
             {scrapeResult && (
-              <div className={`mt-6 p-6 rounded-lg ${scrapeResult.success ? 'bg-green-50 border-2 border-green-200' : 'bg-red-50 border-2 border-red-200'}`}>
+              <div className={`mt-6 p-6 rounded-lg ${scrapeResult.success ? 'bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800'}`}>
                 {scrapeResult.success ? (
                   <>
                     <div className="flex items-center mb-4">
-                      <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center text-white text-xl mr-3">
+                      <div className="w-10 h-10 bg-green-500 dark:bg-green-600 rounded-full flex items-center justify-center text-white text-xl mr-3">
                         ✓
                       </div>
                       <div>
-                        <h4 className="text-lg font-semibold text-green-900">{scrapeResult.message}</h4>
-                        <p className="text-sm text-green-700">Your data has been scraped and backed up!</p>
+                        <h4 className="text-lg font-semibold text-green-900 dark:text-green-300">{scrapeResult.message}</h4>
+                        <p className="text-sm text-green-700 dark:text-green-400">Your data has been scraped and backed up!</p>
                       </div>
                     </div>
 
                     <div className="grid grid-cols-3 gap-4 mt-4">
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-blue-600">{scrapeResult.data.tweets.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Tweets</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{scrapeResult.data.tweets.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">Tweets</div>
                       </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-purple-600">{scrapeResult.data.followers.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Followers</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-purple-600 dark:text-purple-400">{scrapeResult.data.followers.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">Followers</div>
                       </div>
-                      <div className="bg-white rounded-lg p-4 text-center">
-                        <div className="text-3xl font-bold text-green-600">{scrapeResult.data.following.toLocaleString()}</div>
-                        <div className="text-sm text-gray-600 mt-1">Following</div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-4 text-center">
+                        <div className="text-3xl font-bold text-green-600 dark:text-green-400">{scrapeResult.data.following.toLocaleString()}</div>
+                        <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">Following</div>
                       </div>
                     </div>
 
                     <div className="mt-6 text-center">
                       <button
                         onClick={() => router.push('/dashboard/backups')}
-                        className="px-6 py-3 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition"
+                        className="px-6 py-3 bg-purple-500 dark:bg-purple-600 text-white rounded-lg hover:bg-purple-600 dark:hover:bg-purple-700 transition"
                       >
                         View All Backups →
                       </button>
@@ -399,12 +403,12 @@ export default function Dashboard() {
 
                 ) : (
                   <div className="flex items-center">
-                    <div className="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center text-white text-xl mr-3">
+                    <div className="w-10 h-10 bg-red-500 dark:bg-red-600 rounded-full flex items-center justify-center text-white text-xl mr-3">
                       ✗
                     </div>
                     <div>
-                      <h4 className="text-lg font-semibold text-red-900">Scraping Failed</h4>
-                      <p className="text-sm text-red-700">{scrapeResult.error}</p>
+                      <h4 className="text-lg font-semibold text-red-900 dark:text-red-300">Scraping Failed</h4>
+                      <p className="text-sm text-red-700 dark:text-red-400">{scrapeResult.error}</p>
                     </div>
                   </div>
                 )}

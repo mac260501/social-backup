@@ -3,6 +3,7 @@
 import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { ThemeToggle } from '@/components/theme-toggle'
 
 export default function BackupsPage() {
   const { data: session, status } = useSession()
@@ -77,50 +78,53 @@ export default function BackupsPage() {
   }
 
   if (status === 'loading' || loading) {
-    return <div className="min-h-screen flex items-center justify-center">Loading...</div>
+    return <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center text-gray-900 dark:text-white">Loading...</div>
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <nav className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center space-x-8">
-              <h1 className="text-xl font-semibold text-gray-900">Social Backup</h1>
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-white">Social Backup</h1>
               <div className="flex space-x-1">
                 <button
                   onClick={() => router.push('/dashboard')}
-                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+                  className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
                 >
                   Dashboard
                 </button>
                 <button
                   onClick={() => router.push('/dashboard/backups')}
-                  className="px-4 py-2 text-sm font-medium text-blue-600 border-b-2 border-blue-600"
+                  className="px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400"
                 >
                   Backups
                 </button>
               </div>
             </div>
-            <button
-              onClick={() => signOut({ callbackUrl: '/' })}
-              className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
-            >
-              Sign out
-            </button>
+            <div className="flex items-center space-x-3">
+              <ThemeToggle />
+              <button
+                onClick={() => signOut({ callbackUrl: '/' })}
+                className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </div>
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-6">Your Backups</h2>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Your Backups</h2>
 
         {backups.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-8 text-center">
-            <p className="text-gray-600">No backups yet. Upload your Twitter archive to get started!</p>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg dark:shadow-gray-900/50 p-8 text-center">
+            <p className="text-gray-600 dark:text-gray-300">No backups yet. Upload your Twitter archive to get started!</p>
             <button
               onClick={() => router.push('/dashboard')}
-              className="mt-4 px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+              className="mt-4 px-6 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700"
             >
               Go to Dashboard
             </button>
@@ -128,13 +132,13 @@ export default function BackupsPage() {
         ) : (
           <div className="grid gap-4">
             {backups.map((backup) => (
-              <div key={backup.id} className="bg-white rounded-lg shadow p-6">
+              <div key={backup.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-lg dark:shadow-gray-900/50 p-6">
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                       {backup.backup_name || 'Twitter Archive Backup'}
                     </h3>
-                    <p className="text-sm text-gray-600 mt-1">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                       Uploaded on {new Date(backup.uploaded_at || backup.created_at).toLocaleDateString('en-US', {
                         year: 'numeric',
                         month: 'long',
@@ -143,26 +147,26 @@ export default function BackupsPage() {
                         minute: '2-digit'
                       })}
                     </p>
-                    <p className="text-sm text-gray-600 mt-1">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                       Size: <span className="font-semibold">{(backup.file_size / 1024 / 1024).toFixed(2)} MB</span>
                     </p>
                   </div>
                   <div className="flex space-x-2">
                     <button
                       onClick={() => setSelectedBackup(selectedBackup?.id === backup.id ? null : backup)}
-                      className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                      className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
                     >
                       {selectedBackup?.id === backup.id ? 'Collapse' : 'Expand'}
                     </button>
                     <button
                       onClick={() => downloadBackup(backup)}
-                      className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+                      className="px-4 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700"
                     >
                       Download
                     </button>
                     <button
                       onClick={() => deleteBackup(backup.id, 'backup')}
-                      className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                      className="px-4 py-2 bg-red-500 dark:bg-red-600 text-white rounded-lg hover:bg-red-600 dark:hover:bg-red-700"
                     >
                       Delete
                     </button>
@@ -172,49 +176,49 @@ export default function BackupsPage() {
                 {/* Stats Summary */}
                 {backup.stats && (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                    <div className="bg-blue-50 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-blue-600">{backup.stats.tweets?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 mt-1">Tweets</div>
+                    <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{backup.stats.tweets?.toLocaleString() || 0}</div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
                     </div>
-                    <div className="bg-purple-50 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-purple-600">{backup.stats.followers?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 mt-1">Followers</div>
+                    <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">{backup.stats.followers?.toLocaleString() || 0}</div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Followers</div>
                     </div>
-                    <div className="bg-green-50 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-green-600">{backup.stats.following?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 mt-1">Following</div>
+                    <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-green-600 dark:text-green-400">{backup.stats.following?.toLocaleString() || 0}</div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Following</div>
                     </div>
-                    <div className="bg-red-50 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-red-600">{backup.stats.likes?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 mt-1">Likes</div>
+                    <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-red-600 dark:text-red-400">{backup.stats.likes?.toLocaleString() || 0}</div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Likes</div>
                     </div>
-                    <div className="bg-indigo-50 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-indigo-600">{backup.stats.dms?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 mt-1">DMs</div>
+                    <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{backup.stats.dms?.toLocaleString() || 0}</div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">DMs</div>
                     </div>
                   </div>
                 )}
 
                 {/* Expandable Data Sections */}
                 {selectedBackup?.id === backup.id && (
-                  <div className="mt-4 border-t pt-4 space-y-2">
+                  <div className="mt-4 border-t dark:border-gray-700 pt-4 space-y-2">
                     {/* Tweets Section */}
                     {backup.data?.tweets && backup.data.tweets.length > 0 && (
-                      <div className="border rounded-lg">
+                      <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'tweets')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
+                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
                         >
-                          <span className="font-semibold text-gray-900">
+                          <span className="font-semibold text-gray-900 dark:text-white">
                             Tweets ({backup.data.tweets.length})
                           </span>
-                          <span className="text-gray-500">
+                          <span className="text-gray-500 dark:text-gray-400">
                             {expandedSection === `${backup.id}-tweets` ? '−' : '+'}
                           </span>
                         </button>
                         {expandedSection === `${backup.id}-tweets` && (
                           <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 bg-gray-50 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
+                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
                               {JSON.stringify(backup.data.tweets.slice(0, 10), null, 2)}
                               {backup.data.tweets.length > 10 && `\n\n... and ${backup.data.tweets.length - 10} more`}
                             </pre>
@@ -225,7 +229,7 @@ export default function BackupsPage() {
 
                     {/* Followers Section */}
                     {backup.data?.followers && backup.data.followers.length > 0 && (
-                      <div className="border rounded-lg">
+                      <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'followers')}
                           className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
