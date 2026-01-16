@@ -27,18 +27,30 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMounted(true)
+    // Ensure DOM is in sync with state after mount
+    const currentTheme = localStorage.getItem('theme') as Theme
+    if (currentTheme === 'dark') {
+      document.documentElement.classList.add('dark')
+    } else if (currentTheme === 'light') {
+      document.documentElement.classList.remove('dark')
+    }
   }, [])
 
   const toggleTheme = () => {
+    console.log('toggleTheme called, current theme:', theme)
     const newTheme = theme === 'light' ? 'dark' : 'light'
+    console.log('Setting new theme to:', newTheme)
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
 
     if (newTheme === 'dark') {
       document.documentElement.classList.add('dark')
+      console.log('Added dark class to document')
     } else {
       document.documentElement.classList.remove('dark')
+      console.log('Removed dark class from document')
     }
+    console.log('Document classes:', document.documentElement.className)
   }
 
   if (!mounted) {
