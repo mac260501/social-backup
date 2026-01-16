@@ -37,20 +37,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const toggleTheme = () => {
-    console.log('toggleTheme called, current theme:', theme)
     const newTheme = theme === 'light' ? 'dark' : 'light'
-    console.log('Setting new theme to:', newTheme)
     setTheme(newTheme)
     localStorage.setItem('theme', newTheme)
 
     if (newTheme === 'dark') {
       document.documentElement.classList.add('dark')
-      console.log('Added dark class to document')
     } else {
       document.documentElement.classList.remove('dark')
-      console.log('Removed dark class from document')
     }
-    console.log('Document classes:', document.documentElement.className)
   }
 
   if (!mounted) {
