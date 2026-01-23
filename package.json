@@ -11,7 +11,7 @@
   "dependencies": {
     "@supabase/auth-helpers-nextjs": "^0.15.0",
     "@supabase/ssr": "^0.8.0",
-    "@supabase/supabase-js": "^2.90.1",
+    "@supabase/supabase-js": "^2.91.0",
     "@types/yauzl": "^2.10.3",
     "adm-zip": "^0.5.16",
     "apify-client": "^2.21.0",

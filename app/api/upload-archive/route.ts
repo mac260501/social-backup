@@ -63,7 +63,150 @@ function extractFileFromZip(zipfile: any, fileName: string): Promise<string | nu
   })
 }
 
+// Helper to extract media files from ZIP
+async function extractMediaFiles(
+  zipPath: string,
+  userId: string,
+  backupId: string
+): Promise<{ mediaFiles: any[], uploadedCount: number }> {
+  const fs = require('fs')
+  const mediaFolders = [
+    'data/tweets_media',
+    'data/direct_messages_media',
+    'data/direct_messages_group_media',
+    'data/grok_chat_media',
+    'data/community_tweet_media',
+    'data/profile_media',
+    'data/moments_media',
+    'data/moments_tweets_media',
+    'data/deleted_tweets_media',
+  ]
+
+  const mediaFiles: any[] = []
+  let uploadedCount = 0
+
+  // Open ZIP to get all entries
+  const zipfile: any = await new Promise((resolve, reject) => {
+    yauzl.open(zipPath, { lazyEntries: true, autoClose: false }, (err, zipfile) => {
+      if (err) reject(err)
+      else resolve(zipfile)
+    })
+  })
+
+  const entries: any[] = []
+  await new Promise<void>((resolve) => {
+    zipfile.on('entry', (entry: any) => {
+      entries.push(entry)
+      zipfile.readEntry()
+    })
+    zipfile.on('end', () => resolve())
+    zipfile.readEntry()
+  })
+
+  zipfile.close()
+
+  // Filter media entries
+  const mediaEntries = entries.filter((entry: any) => {
+    return mediaFolders.some(folder => entry.fileName.startsWith(folder + '/'))
+      && !entry.fileName.endsWith('/') // Skip directories
+  })
+
+  console.log(`Found ${mediaEntries.length} media files to upload`)
+
+  // Upload each media file
+  for (const entry of mediaEntries) {
+    try {
+      // Extract file content
+      const zipfile2: any = await new Promise((resolve, reject) => {
+        yauzl.open(zipPath, { lazyEntries: true }, (err, zf) => err ? reject(err) : resolve(zf))
+      })
+
+      const fileBuffer = await new Promise<Buffer>((resolve, reject) => {
+        zipfile2.on('entry', (e: any) => {
+          if (e.fileName === entry.fileName) {
+            zipfile2.openReadStream(e, (err: any, stream: any) => {
+              if (err) {
+                reject(err)
+                return
+              }
+              const chunks: Buffer[] = []
+              stream.on('data', (chunk: Buffer) => chunks.push(chunk))
+              stream.on('end', () => resolve(Buffer.concat(chunks)))
+              stream.on('error', reject)
+            })
+          } else {
+            zipfile2.readEntry()
+          }
+        })
+        zipfile2.readEntry()
+      })
+
+      zipfile2.close()
+
+      // Determine media type (folder name)
+      const mediaType = entry.fileName.split('/')[1] // e.g., 'tweets_media'
+      const fileName = entry.fileName.split('/').pop() // e.g., 'image.jpg'
+      
+      // Storage path: {userId}/{mediaType}/{fileName}
+      const storagePath = `${userId}/${mediaType}/${fileName}`
+
+      // Determine MIME type from file extension
+      const ext = fileName.split('.').pop()?.toLowerCase()
+      const mimeTypes: { [key: string]: string } = {
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'mp4': 'video/mp4',
+        'mov': 'video/quicktime',
+        'webp': 'image/webp',
+      }
+      const mimeType = mimeTypes[ext || ''] || 'application/octet-stream'
+
+      // Upload to Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from('twitter-media')
+        .upload(storagePath, fileBuffer, {
+          contentType: mimeType,
+          upsert: false, // Don't overwrite existing files
+        })
+
+      if (uploadError) {
+        console.error(`Failed to upload ${fileName}:`, uploadError)
+        continue // Skip this file and continue
+      }
+
+      // Save metadata to database
+      mediaFiles.push({
+        user_id: userId,
+        backup_id: backupId,
+        file_path: storagePath,
+        file_name: fileName,
+        file_size: fileBuffer.length,
+        mime_type: mimeType,
+        media_type: mediaType,
+      })
+
+      uploadedCount++
+      
+      // Log progress every 10 files
+      if (uploadedCount % 10 === 0) {
+        console.log(`Uploaded ${uploadedCount}/${mediaEntries.length} media files...`)
+      }
+
+    } catch (error) {
+      console.error(`Error processing media file ${entry.fileName}:`, error)
+      // Continue with next file
+    }
+  }
+
+  return { mediaFiles, uploadedCount }
+}
+
 export async function POST(request: Request) {
+  let tmpPath = ''
+  const fs = require('fs')
+
   try {
     const formData = await request.formData()
     const file = formData.get('file') as File
@@ -81,8 +224,7 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(bytes)
 
     // Write buffer to temp file for yauzl
-    const tmpPath = `/tmp/archive-${Date.now()}.zip`
-    const fs = require('fs')
+    tmpPath = `/tmp/archive-${Date.now()}.zip`
     fs.writeFileSync(tmpPath, buffer)
 
     // Extract files
@@ -143,9 +285,6 @@ export async function POST(request: Request) {
           }
         }
       }
-
-      // Clean up temp file
-      fs.unlinkSync(tmpPath)
     } catch (error) {
       console.error('Error extracting ZIP:', error)
       if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
@@ -253,17 +392,66 @@ export async function POST(request: Request) {
       })
     }
 
-    await supabase.from('backups').insert({
-      user_id: userUuid,
-      data: { tweets, followers, following, likes, direct_messages: directMessages },
-      stats,
-      file_size: buffer.length,
-      archive_date: new Date().toISOString(),
+    // Insert backup and get the ID
+    const { data: backupData, error: backupError } = await supabase
+      .from('backups')
+      .insert({
+        user_id: userUuid,
+        data: { tweets, followers, following, likes, direct_messages: directMessages },
+        stats,
+        file_size: buffer.length,
+        archive_date: new Date().toISOString(),
     })
+    .select()
+    .single()
 
-    return NextResponse.json({ success: true, message: 'Archive processed!', stats })
+    if (backupError) {
+      throw new Error(`Failed to create backup: ${backupError.message}`)
+    }
+
+    const backupId = backupData.id
+
+    console.log('Backup created, now processing media files...')
+
+    // Extract and upload media files
+    const { mediaFiles, uploadedCount } = await extractMediaFiles(tmpPath, userUuid, backupId)
+
+    console.log(`Uploaded ${uploadedCount} media files`)
+
+    // Save media file records to database
+    if (mediaFiles.length > 0) {
+      const { error: mediaError } = await supabase
+        .from('media_files')
+        .insert(mediaFiles)
+
+      if (mediaError) {
+        console.error('Failed to save media file records:', mediaError)
+        // Don't fail the whole upload, just log the error
+      }
+    }
+
+    // Update stats to include media count
+    const updatedStats = {
+      ...stats,
+      media_files: uploadedCount,
+    }
+
+    // Clean up temp file
+    fs.unlinkSync(tmpPath)
+
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Archive processed!', 
+      stats: updatedStats 
+    })
   } catch (error) {
     console.error('Error:', error)
+    
+    // Clean up temp file on error
+    if (tmpPath && fs.existsSync(tmpPath)) {
+      fs.unlinkSync(tmpPath)
+    }
+    
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Failed' }, { status: 500 })
   }
 }
