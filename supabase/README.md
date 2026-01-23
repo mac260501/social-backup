@@ -81,6 +81,20 @@ Key (user_id)=(xxx) is not present in table "users".
 
 ---
 
+### 005_cleanup_orphaned_storage_files.sql
+
+**Issue**: This is a diagnostic query (not a migration) to identify orphaned files in Supabase Storage - files that remain after their backups have been deleted.
+
+**Solution**: The application now handles this automatically when backups are deleted:
+- When you delete a backup via the UI, it checks if media files are used by other backups
+- If a file is only used by the deleted backup, it's removed from storage
+- If a file is shared with other backups, it's kept in storage
+- This prevents orphaned files and reduces storage costs
+
+**Manual cleanup**: If you have existing orphaned files, use this query to identify files that are still referenced in the database. Any files in storage NOT in this list can be manually deleted from the Supabase Dashboard > Storage.
+
+---
+
 ### 002_check_media_state.sql
 
 This is a diagnostic query (not a migration) used to troubleshoot media file issues
