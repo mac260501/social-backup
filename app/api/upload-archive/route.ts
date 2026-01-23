@@ -171,13 +171,22 @@ async function extractMediaFiles(
           upsert: false, // Don't overwrite existing files
         })
 
-      if (uploadError) {
+      // Check if file already exists (409 error) - this is ok, we still count it
+      const fileAlreadyExists = uploadError && (uploadError as any).statusCode === '409'
+
+      if (uploadError && !fileAlreadyExists) {
         console.error(`Failed to upload ${fileName}:`, uploadError)
-        continue // Skip this file and continue
+        continue // Skip this file and continue only if it's a real error
       }
 
-      // Save metadata to database
-      mediaFiles.push({
+      if (fileAlreadyExists) {
+        console.log(`File ${fileName} already exists in storage, skipping upload but counting it`)
+      } else {
+        console.log(`Successfully uploaded ${fileName}`)
+      }
+
+      // Save metadata to database (only if not already exists)
+      const metadataRecord = {
         user_id: userId,
         backup_id: backupId,
         file_path: storagePath,
@@ -185,13 +194,25 @@ async function extractMediaFiles(
         file_size: fileBuffer.length,
         mime_type: mimeType,
         media_type: mediaType,
-      })
+      }
+
+      // Check if this file is already in the database for this backup
+      const { data: existingRecord } = await supabase
+        .from('media_files')
+        .select('id')
+        .eq('backup_id', backupId)
+        .eq('file_path', storagePath)
+        .single()
+
+      if (!existingRecord) {
+        mediaFiles.push(metadataRecord)
+      }
 
       uploadedCount++
-      
+
       // Log progress every 10 files
       if (uploadedCount % 10 === 0) {
-        console.log(`Uploaded ${uploadedCount}/${mediaEntries.length} media files...`)
+        console.log(`Processed ${uploadedCount}/${mediaEntries.length} media files...`)
       }
 
     } catch (error) {
