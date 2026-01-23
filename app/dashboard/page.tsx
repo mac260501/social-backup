@@ -271,10 +271,14 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mt-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mt-4">
                       <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
                         <div className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">{uploadResult.stats.tweets.toLocaleString()}</div>
                         <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Tweets</div>
+                      </div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
+                        <div className="text-2xl sm:text-3xl font-bold text-orange-600 dark:text-orange-400">{uploadResult.stats.media_files?.toLocaleString() || 0}</div>
+                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Media</div>
                       </div>
                       <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
                         <div className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">{uploadResult.stats.followers.toLocaleString()}</div>
@@ -333,6 +337,7 @@ export default function Dashboard() {
                 <p className="text-xs sm:text-sm font-semibold text-purple-900 dark:text-purple-300">✨ What gets scraped:</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2 text-xs sm:text-sm text-purple-800 dark:text-purple-400">
                   <div>✓ Your latest tweets</div>
+                  <div>✓ Your media</div>
                   <div>✓ Your followers</div>
                   <div>✓ Your following</div>
                   <div>✗ Likes (archive only)</div>
@@ -394,10 +399,14 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mt-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-4">
                       <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
                         <div className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">{scrapeResult.data.tweets.toLocaleString()}</div>
                         <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Tweets</div>
+                      </div>
+                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
+                        <div className="text-2xl sm:text-3xl font-bold text-orange-600 dark:text-orange-400">{scrapeResult.data.media_files?.toLocaleString() || 0}</div>
+                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Media</div>
                       </div>
                       <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
                         <div className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">{scrapeResult.data.followers.toLocaleString()}</div>

@@ -171,13 +171,22 @@ async function extractMediaFiles(
           upsert: false, // Don't overwrite existing files
         })
 
-      if (uploadError) {
+      // Check if file already exists (409 error) - this is ok, we still count it
+      const fileAlreadyExists = uploadError && (uploadError as any).statusCode === '409'
+
+      if (uploadError && !fileAlreadyExists) {
         console.error(`Failed to upload ${fileName}:`, uploadError)
-        continue // Skip this file and continue
+        continue // Skip this file and continue only if it's a real error
       }
 
-      // Save metadata to database
-      mediaFiles.push({
+      if (fileAlreadyExists) {
+        console.log(`File ${fileName} already exists in storage, skipping upload but counting it`)
+      } else {
+        console.log(`Successfully uploaded ${fileName}`)
+      }
+
+      // Create media file record for this backup
+      const metadataRecord = {
         user_id: userId,
         backup_id: backupId,
         file_path: storagePath,
@@ -185,13 +194,41 @@ async function extractMediaFiles(
         file_size: fileBuffer.length,
         mime_type: mimeType,
         media_type: mediaType,
-      })
+      }
+
+      // Check if a record already exists for THIS specific backup + file path combination
+      // (this handles retries or re-processing of the same upload)
+      const { data: existingForBackup } = await supabase
+        .from('media_files')
+        .select('id')
+        .eq('backup_id', backupId)
+        .eq('file_path', storagePath)
+        .maybeSingle()
+
+      if (existingForBackup) {
+        console.log(`Media record for ${fileName} already exists for this backup, skipping insert`)
+        mediaFiles.push(metadataRecord)
+      } else {
+        // Insert the record - with the updated schema (composite unique on backup_id + file_path),
+        // the same file can be associated with multiple different backups
+        const { error: insertError } = await supabase
+          .from('media_files')
+          .insert(metadataRecord)
+
+        if (insertError) {
+          console.error(`Failed to insert media record for ${fileName}:`, insertError)
+          // Don't count files that failed to insert
+        } else {
+          console.log(`Inserted media record for ${fileName}`)
+          mediaFiles.push(metadataRecord)
+        }
+      }
 
       uploadedCount++
-      
+
       // Log progress every 10 files
       if (uploadedCount % 10 === 0) {
-        console.log(`Uploaded ${uploadedCount}/${mediaEntries.length} media files...`)
+        console.log(`Processed ${uploadedCount}/${mediaEntries.length} media files...`)
       }
 
     } catch (error) {
@@ -416,19 +453,7 @@ export async function POST(request: Request) {
     // Extract and upload media files
     const { mediaFiles, uploadedCount } = await extractMediaFiles(tmpPath, userUuid, backupId)
 
-    console.log(`Uploaded ${uploadedCount} media files`)
-
-    // Save media file records to database
-    if (mediaFiles.length > 0) {
-      const { error: mediaError } = await supabase
-        .from('media_files')
-        .insert(mediaFiles)
-
-      if (mediaError) {
-        console.error('Failed to save media file records:', mediaError)
-        // Don't fail the whole upload, just log the error
-      }
-    }
+    console.log(`Processed ${uploadedCount} media files (${mediaFiles.length} new records inserted)`)
 
     // Update stats to include media count
     const updatedStats = {
@@ -436,13 +461,24 @@ export async function POST(request: Request) {
       media_files: uploadedCount,
     }
 
+    // Update the backup record with the new stats including media count
+    const { error: updateError } = await supabase
+      .from('backups')
+      .update({ stats: updatedStats })
+      .eq('id', backupId)
+
+    if (updateError) {
+      console.error('Failed to update backup stats:', updateError)
+      // Don't fail the whole upload, just log the error
+    }
+
     // Clean up temp file
     fs.unlinkSync(tmpPath)
 
-    return NextResponse.json({ 
-      success: true, 
-      message: 'Archive processed!', 
-      stats: updatedStats 
+    return NextResponse.json({
+      success: true,
+      message: 'Archive processed!',
+      stats: updatedStats
     })
   } catch (error) {
     console.error('Error:', error)

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { createHash } from 'crypto'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { createUuidFromString } from '@/lib/auth-helpers'
 
 // Use service role for backend operations (bypasses RLS)
 const supabase = createClient(
@@ -8,24 +10,31 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-function createUuidFromString(str: string): string {
-  const hash = createHash('sha256').update(str).digest('hex')
-  return [
-    hash.substring(0, 8),
-    hash.substring(8, 12),
-    hash.substring(12, 16),
-    hash.substring(16, 20),
-    hash.substring(20, 32),
-  ].join('-')
-}
-
 export async function GET(request: Request) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions)
+    if (!session || !session.user?.id) {
+      return NextResponse.json({
+        success: false,
+        error: 'Unauthorized'
+      }, { status: 401 })
+    }
+
     const { searchParams } = new URL(request.url)
     const userId = searchParams.get('userId')
 
     if (!userId) {
       return NextResponse.json({ success: false, error: 'User ID is required' }, { status: 400 })
+    }
+
+    // Verify that the requested userId matches the authenticated session user
+    if (userId !== session.user.id) {
+      console.warn(`[Security] User ${session.user.id} attempted to fetch backups for user ${userId}`)
+      return NextResponse.json({
+        success: false,
+        error: 'Forbidden - you can only access your own backups'
+      }, { status: 403 })
     }
 
     const userUuid = createUuidFromString(userId)

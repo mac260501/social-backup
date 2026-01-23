@@ -1,5 +1,11 @@
 // Shared types for all Twitter providers
 
+export interface TweetMedia {
+  url: string
+  type: 'photo' | 'video' | 'animated_gif'
+  media_url?: string  // Direct URL to media file
+}
+
 export interface Tweet {
   id: string
   text: string
@@ -11,6 +17,7 @@ export interface Tweet {
     username: string
     name: string
   }
+  media?: TweetMedia[]  // Media attachments (photos, videos, gifs)
 }
 
 export interface Follower {

@@ -12,6 +12,8 @@ export default function BackupsPage() {
   const [loading, setLoading] = useState(true)
   const [selectedBackup, setSelectedBackup] = useState<any>(null)
   const [expandedSection, setExpandedSection] = useState<string | null>(null)
+  const [mediaFiles, setMediaFiles] = useState<{ [key: string]: any[] }>({})
+  const [loadingMedia, setLoadingMedia] = useState<{ [key: string]: boolean }>({})
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -48,9 +50,37 @@ export default function BackupsPage() {
     link.click()
   }
 
+  const fetchMediaFiles = async (backupId: string) => {
+    if (mediaFiles[backupId] || loadingMedia[backupId]) {
+      return // Already loaded or loading
+    }
+
+    setLoadingMedia({ ...loadingMedia, [backupId]: true })
+
+    try {
+      const response = await fetch(`/api/media?backupId=${encodeURIComponent(backupId)}`)
+      const result = await response.json()
+
+      if (result.success) {
+        setMediaFiles({ ...mediaFiles, [backupId]: result.mediaFiles || [] })
+      }
+    } catch (error) {
+      console.error('Error fetching media files:', error)
+      setMediaFiles({ ...mediaFiles, [backupId]: [] })
+    } finally {
+      setLoadingMedia({ ...loadingMedia, [backupId]: false })
+    }
+  }
+
   const toggleSection = (backupId: string, section: string) => {
     const key = `${backupId}-${section}`
-    setExpandedSection(expandedSection === key ? null : key)
+    const newExpandedSection = expandedSection === key ? null : key
+    setExpandedSection(newExpandedSection)
+
+    // Fetch media files when media section is expanded
+    if (section === 'media' && newExpandedSection === key) {
+      fetchMediaFiles(backupId)
+    }
   }
 
   const deleteBackup = async (backupId: string, backupType: string) => {
@@ -193,28 +223,57 @@ export default function BackupsPage() {
 
                 {/* Stats Summary */}
                 {backup.stats && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 mb-4">
-                    <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">{backup.stats.tweets?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
-                    </div>
-                    <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400">{backup.stats.followers?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Followers</div>
-                    </div>
-                    <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-green-600 dark:text-green-400">{backup.stats.following?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Following</div>
-                    </div>
-                    <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-red-600 dark:text-red-400">{backup.stats.likes?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Likes</div>
-                    </div>
-                    <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400">{backup.stats.dms?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">DMs</div>
-                    </div>
-                  </div>
+                  <>
+                    {backup.backup_source === 'archive_upload' ? (
+                      /* Archive backups: Show all 6 stats */
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-4">
+                        <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">{backup.stats.tweets?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
+                        </div>
+                        <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">{backup.stats.media_files?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Media</div>
+                        </div>
+                        <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400">{backup.stats.followers?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Followers</div>
+                        </div>
+                        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-green-600 dark:text-green-400">{backup.stats.following?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Following</div>
+                        </div>
+                        <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-red-600 dark:text-red-400">{backup.stats.likes?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Likes</div>
+                        </div>
+                        <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400">{backup.stats.dms?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">DMs</div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Scraped backups: Show only 4 stats (tweets, media, followers, following) */
+                      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4">
+                        <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">{backup.stats.tweets?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
+                        </div>
+                        <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">{backup.stats.media_files?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Media</div>
+                        </div>
+                        <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400">{backup.stats.followers?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Followers</div>
+                        </div>
+                        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-green-600 dark:text-green-400">{backup.stats.following?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Following</div>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {/* Expandable Data Sections */}
@@ -245,8 +304,64 @@ export default function BackupsPage() {
                       </div>
                     )}
 
+                    {/* Media Section */}
+                    {backup.stats?.media_files && backup.stats.media_files > 0 && (
+                      <div className="border dark:border-gray-700 rounded-lg">
+                        <button
+                          onClick={() => toggleSection(backup.id, 'media')}
+                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                        >
+                          <span className="font-semibold text-gray-900 dark:text-white">
+                            Media Files ({backup.stats.media_files})
+                          </span>
+                          <span className="text-gray-500 dark:text-gray-400">
+                            {expandedSection === `${backup.id}-media` ? '−' : '+'}
+                          </span>
+                        </button>
+                        {expandedSection === `${backup.id}-media` && (
+                          <div className="px-4 pb-4 max-h-96 overflow-auto">
+                            {loadingMedia[backup.id] ? (
+                              <div className="text-center py-4 text-gray-600 dark:text-gray-400">
+                                Loading media files...
+                              </div>
+                            ) : mediaFiles[backup.id] && mediaFiles[backup.id].length > 0 ? (
+                              <div className="space-y-2">
+                                {mediaFiles[backup.id].slice(0, 15).map((media: any, index: number) => (
+                                  <div key={index} className="bg-gray-50 dark:bg-gray-900 p-3 rounded text-xs">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-semibold text-gray-900 dark:text-white truncate">
+                                          {media.file_name}
+                                        </div>
+                                        <div className="text-gray-600 dark:text-gray-400 mt-1">
+                                          Type: <span className="text-orange-600 dark:text-orange-400">{media.media_type}</span>
+                                          {' • '}
+                                          Size: {(media.file_size / 1024).toFixed(1)} KB
+                                          {' • '}
+                                          {media.mime_type}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                                {mediaFiles[backup.id].length > 15 && (
+                                  <div className="text-center text-gray-500 dark:text-gray-400 text-xs py-2">
+                                    ... and {mediaFiles[backup.id].length - 15} more media files
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-center py-4 text-gray-600 dark:text-gray-400">
+                                No media files found
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Followers Section */}
-                    {backup.data?.followers && backup.data.followers.length > 0 && (
+                    {backup.data?.followers && Array.isArray(backup.data.followers) && backup.data.followers.length > 0 && backup.data.followers.some((f: any) => f && (f.username || f.user_id)) && (
                       <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'followers')}
@@ -271,7 +386,7 @@ export default function BackupsPage() {
                     )}
 
                     {/* Following Section */}
-                    {backup.data?.following && backup.data.following.length > 0 && (
+                    {backup.data?.following && Array.isArray(backup.data.following) && backup.data.following.length > 0 && backup.data.following.some((f: any) => f && (f.username || f.user_id)) && (
                       <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'following')}

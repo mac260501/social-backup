@@ -51,18 +51,29 @@ export class ApifyProvider implements TwitterProvider {
       }
 
       // Transform Apify format to our standard format
-      const tweets: Tweet[] = items.map((item: any) => ({
-        id: item.id || item.id_str,
-        text: item.full_text || item.text || '',
-        created_at: item.created_at,
-        retweet_count: item.retweet_count || 0,
-        favorite_count: item.favorite_count || 0,
-        reply_count: item.reply_count || 0,
-        author: {
-          username: item.user?.screen_name || username,
-          name: item.user?.name || '',
-        },
-      }))
+      const tweets: Tweet[] = items.map((item: any) => {
+        // Extract media from extended_entities or entities
+        const mediaEntities = item.extended_entities?.media || item.entities?.media || []
+        const media = mediaEntities.map((m: any) => ({
+          url: m.url || m.expanded_url || '',
+          type: m.type === 'photo' ? 'photo' : m.type === 'video' ? 'video' : 'animated_gif',
+          media_url: m.media_url_https || m.media_url || ''
+        }))
+
+        return {
+          id: item.id || item.id_str,
+          text: item.full_text || item.text || '',
+          created_at: item.created_at,
+          retweet_count: item.retweet_count || 0,
+          favorite_count: item.favorite_count || 0,
+          reply_count: item.reply_count || 0,
+          author: {
+            username: item.user?.screen_name || username,
+            name: item.user?.name || '',
+          },
+          media: media.length > 0 ? media : undefined
+        }
+      })
 
       console.log(`[Apify] Successfully scraped ${tweets.length} tweets`)
       return tweets
