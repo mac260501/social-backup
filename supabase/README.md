@@ -6,10 +6,23 @@ This directory contains SQL migration files for the Supabase database schema.
 
 ## How to Apply Migrations
 
+### Step 1: Run Diagnostic (Optional but Recommended)
+
+Before applying the migration, you can check what constraints/indexes currently exist:
+
 1. Go to your Supabase project dashboard
 2. Navigate to the SQL Editor
-3. Copy the contents of the migration file
+3. Open and copy the contents of `000_diagnostic_check.sql`
 4. Paste and execute the SQL
+5. Review the results to see current constraints/indexes
+
+### Step 2: Apply the Migration
+
+1. Go to your Supabase project dashboard
+2. Navigate to the SQL Editor
+3. Copy the contents of `001_fix_media_files_constraint.sql`
+4. Paste and execute the SQL
+5. The migration is safe to run - it uses IF EXISTS/IF NOT EXISTS to avoid errors
 
 ## Migrations
 
