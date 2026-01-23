@@ -185,7 +185,7 @@ async function extractMediaFiles(
         console.log(`Successfully uploaded ${fileName}`)
       }
 
-      // Insert media file record to database immediately (regardless of upload status)
+      // Create media file record for this backup
       const metadataRecord = {
         user_id: userId,
         backup_id: backupId,
@@ -196,21 +196,32 @@ async function extractMediaFiles(
         media_type: mediaType,
       }
 
-      // Insert the record
-      const { error: insertError } = await supabase
+      // Check if a record already exists for THIS specific backup + file path combination
+      // (this handles retries or re-processing of the same upload)
+      const { data: existingForBackup } = await supabase
         .from('media_files')
-        .insert(metadataRecord)
+        .select('id')
+        .eq('backup_id', backupId)
+        .eq('file_path', storagePath)
+        .maybeSingle()
 
-      if (insertError) {
-        // Check if it's a duplicate key error (record already exists for this backup)
-        if (insertError.code === '23505') {
-          console.log(`Media record for ${fileName} already exists in database for this backup`)
-        } else {
-          console.error(`Failed to insert media record for ${fileName}:`, insertError)
-        }
-      } else {
-        console.log(`Inserted media record for ${fileName}`)
+      if (existingForBackup) {
+        console.log(`Media record for ${fileName} already exists for this backup, skipping insert`)
         mediaFiles.push(metadataRecord)
+      } else {
+        // Insert the record - with the updated schema (composite unique on backup_id + file_path),
+        // the same file can be associated with multiple different backups
+        const { error: insertError } = await supabase
+          .from('media_files')
+          .insert(metadataRecord)
+
+        if (insertError) {
+          console.error(`Failed to insert media record for ${fileName}:`, insertError)
+          // Don't count files that failed to insert
+        } else {
+          console.log(`Inserted media record for ${fileName}`)
+          mediaFiles.push(metadataRecord)
+        }
       }
 
       uploadedCount++
