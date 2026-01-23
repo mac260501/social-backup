@@ -185,7 +185,7 @@ async function extractMediaFiles(
         console.log(`Successfully uploaded ${fileName}`)
       }
 
-      // Save metadata to database (only if not already exists)
+      // Insert media file record to database immediately (regardless of upload status)
       const metadataRecord = {
         user_id: userId,
         backup_id: backupId,
@@ -196,15 +196,20 @@ async function extractMediaFiles(
         media_type: mediaType,
       }
 
-      // Check if this file is already in the database for this backup
-      const { data: existingRecord } = await supabase
+      // Insert the record
+      const { error: insertError } = await supabase
         .from('media_files')
-        .select('id')
-        .eq('backup_id', backupId)
-        .eq('file_path', storagePath)
-        .single()
+        .insert(metadataRecord)
 
-      if (!existingRecord) {
+      if (insertError) {
+        // Check if it's a duplicate key error (record already exists for this backup)
+        if (insertError.code === '23505') {
+          console.log(`Media record for ${fileName} already exists in database for this backup`)
+        } else {
+          console.error(`Failed to insert media record for ${fileName}:`, insertError)
+        }
+      } else {
+        console.log(`Inserted media record for ${fileName}`)
         mediaFiles.push(metadataRecord)
       }
 
@@ -437,19 +442,7 @@ export async function POST(request: Request) {
     // Extract and upload media files
     const { mediaFiles, uploadedCount } = await extractMediaFiles(tmpPath, userUuid, backupId)
 
-    console.log(`Uploaded ${uploadedCount} media files`)
-
-    // Save media file records to database
-    if (mediaFiles.length > 0) {
-      const { error: mediaError } = await supabase
-        .from('media_files')
-        .insert(mediaFiles)
-
-      if (mediaError) {
-        console.error('Failed to save media file records:', mediaError)
-        // Don't fail the whole upload, just log the error
-      }
-    }
+    console.log(`Processed ${uploadedCount} media files (${mediaFiles.length} new records inserted)`)
 
     // Update stats to include media count
     const updatedStats = {
