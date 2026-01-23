@@ -12,6 +12,8 @@ export default function BackupsPage() {
   const [loading, setLoading] = useState(true)
   const [selectedBackup, setSelectedBackup] = useState<any>(null)
   const [expandedSection, setExpandedSection] = useState<string | null>(null)
+  const [mediaFiles, setMediaFiles] = useState<{ [key: string]: any[] }>({})
+  const [loadingMedia, setLoadingMedia] = useState<{ [key: string]: boolean }>({})
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -48,9 +50,37 @@ export default function BackupsPage() {
     link.click()
   }
 
+  const fetchMediaFiles = async (backupId: string) => {
+    if (mediaFiles[backupId] || loadingMedia[backupId]) {
+      return // Already loaded or loading
+    }
+
+    setLoadingMedia({ ...loadingMedia, [backupId]: true })
+
+    try {
+      const response = await fetch(`/api/media?backupId=${encodeURIComponent(backupId)}`)
+      const result = await response.json()
+
+      if (result.success) {
+        setMediaFiles({ ...mediaFiles, [backupId]: result.mediaFiles || [] })
+      }
+    } catch (error) {
+      console.error('Error fetching media files:', error)
+      setMediaFiles({ ...mediaFiles, [backupId]: [] })
+    } finally {
+      setLoadingMedia({ ...loadingMedia, [backupId]: false })
+    }
+  }
+
   const toggleSection = (backupId: string, section: string) => {
     const key = `${backupId}-${section}`
-    setExpandedSection(expandedSection === key ? null : key)
+    const newExpandedSection = expandedSection === key ? null : key
+    setExpandedSection(newExpandedSection)
+
+    // Fetch media files when media section is expanded
+    if (section === 'media' && newExpandedSection === key) {
+      fetchMediaFiles(backupId)
+    }
   }
 
   const deleteBackup = async (backupId: string, backupType: string) => {
@@ -244,6 +274,62 @@ export default function BackupsPage() {
                               {JSON.stringify(backup.data.tweets.slice(0, 10), null, 2)}
                               {backup.data.tweets.length > 10 && `\n\n... and ${backup.data.tweets.length - 10} more`}
                             </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Media Section */}
+                    {backup.stats?.media_files && backup.stats.media_files > 0 && (
+                      <div className="border dark:border-gray-700 rounded-lg">
+                        <button
+                          onClick={() => toggleSection(backup.id, 'media')}
+                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                        >
+                          <span className="font-semibold text-gray-900 dark:text-white">
+                            Media Files ({backup.stats.media_files})
+                          </span>
+                          <span className="text-gray-500 dark:text-gray-400">
+                            {expandedSection === `${backup.id}-media` ? '−' : '+'}
+                          </span>
+                        </button>
+                        {expandedSection === `${backup.id}-media` && (
+                          <div className="px-4 pb-4 max-h-96 overflow-auto">
+                            {loadingMedia[backup.id] ? (
+                              <div className="text-center py-4 text-gray-600 dark:text-gray-400">
+                                Loading media files...
+                              </div>
+                            ) : mediaFiles[backup.id] && mediaFiles[backup.id].length > 0 ? (
+                              <div className="space-y-2">
+                                {mediaFiles[backup.id].slice(0, 15).map((media: any, index: number) => (
+                                  <div key={index} className="bg-gray-50 dark:bg-gray-900 p-3 rounded text-xs">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-semibold text-gray-900 dark:text-white truncate">
+                                          {media.file_name}
+                                        </div>
+                                        <div className="text-gray-600 dark:text-gray-400 mt-1">
+                                          Type: <span className="text-orange-600 dark:text-orange-400">{media.media_type}</span>
+                                          {' • '}
+                                          Size: {(media.file_size / 1024).toFixed(1)} KB
+                                          {' • '}
+                                          {media.mime_type}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                                {mediaFiles[backup.id].length > 15 && (
+                                  <div className="text-center text-gray-500 dark:text-gray-400 text-xs py-2">
+                                    ... and {mediaFiles[backup.id].length - 15} more media files
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-center py-4 text-gray-600 dark:text-gray-400">
+                                No media files found
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
