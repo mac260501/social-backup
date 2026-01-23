@@ -62,6 +62,25 @@ Key (user_id)=(xxx) is not present in table "users".
 
 ---
 
+### 004_backfill_missing_media_records.sql
+
+**Issue**: Old backups (created before the FK fix in migration 003) show media count but have no media_files records in the database. The actual media files exist in Supabase Storage, but the database records were never created due to the FK constraint error.
+
+**Solution**: This migration:
+- Finds backups that claim to have media but have no records
+- Uses a successful backup as a template
+- Creates media_files records for old backups by copying file references from the successful backup
+- Links the same storage files to multiple backups (which is now allowed after migration 001)
+
+**When to apply**:
+- Apply this AFTER migrations 001 and 003
+- Apply this AFTER uploading at least one archive successfully (so there's a template to copy from)
+- This will make old backups show media files when expanded
+
+**Important**: This script assumes all your backups are for the same user and contain the same media files (which is typical during testing). If you have different media files for different backups, you may need to customize this script.
+
+---
+
 ### 002_check_media_state.sql
 
 This is a diagnostic query (not a migration) used to troubleshoot media file issues
