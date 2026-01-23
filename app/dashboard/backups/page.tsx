@@ -336,7 +336,7 @@ export default function BackupsPage() {
                     )}
 
                     {/* Followers Section */}
-                    {backup.data?.followers && backup.data.followers.length > 0 && (
+                    {backup.data?.followers && Array.isArray(backup.data.followers) && backup.data.followers.length > 0 && backup.data.followers.some((f: any) => f && (f.username || f.user_id)) && (
                       <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'followers')}
@@ -361,7 +361,7 @@ export default function BackupsPage() {
                     )}
 
                     {/* Following Section */}
-                    {backup.data?.following && backup.data.following.length > 0 && (
+                    {backup.data?.following && Array.isArray(backup.data.following) && backup.data.following.length > 0 && backup.data.following.some((f: any) => f && (f.username || f.user_id)) && (
                       <div className="border dark:border-gray-700 rounded-lg">
                         <button
                           onClick={() => toggleSection(backup.id, 'following')}
