@@ -436,13 +436,24 @@ export async function POST(request: Request) {
       media_files: uploadedCount,
     }
 
+    // Update the backup record with the new stats including media count
+    const { error: updateError } = await supabase
+      .from('backups')
+      .update({ stats: updatedStats })
+      .eq('id', backupId)
+
+    if (updateError) {
+      console.error('Failed to update backup stats:', updateError)
+      // Don't fail the whole upload, just log the error
+    }
+
     // Clean up temp file
     fs.unlinkSync(tmpPath)
 
-    return NextResponse.json({ 
-      success: true, 
-      message: 'Archive processed!', 
-      stats: updatedStats 
+    return NextResponse.json({
+      success: true,
+      message: 'Archive processed!',
+      stats: updatedStats
     })
   } catch (error) {
     console.error('Error:', error)
