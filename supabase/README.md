@@ -40,6 +40,39 @@ Before applying the migration, you can check what constraints/indexes currently 
 - Adds a composite unique constraint on `(backup_id, file_path)`
 - Allows the same media file in storage to be linked to multiple different backups
 
+**When to apply**: Apply this migration first before 003_fix_media_files_user_fkey.sql
+
+---
+
+### 003_fix_media_files_user_fkey.sql
+
+**Issue**: The `media_files.user_id` field had a foreign key constraint pointing to `auth.users(id)`, but the application code uses a UUID generated from the Twitter user ID which is stored in `profiles.id`. This caused error 23503 when trying to insert media records:
+
+```
+insert or update on table "media_files" violates foreign key constraint "media_files_user_id_fkey"
+Key (user_id)=(xxx) is not present in table "users".
+```
+
+**Solution**: This migration:
+- Drops the foreign key constraint pointing to `auth.users(id)`
+- Adds a new foreign key constraint pointing to `public.profiles(id)`
+- Makes it consistent with the `backups` table which also references `profiles.id`
+
+**When to apply**: Apply this migration after 001_fix_media_files_constraint.sql
+
+---
+
+### 002_check_media_state.sql
+
+This is a diagnostic query (not a migration) used to troubleshoot media file issues
+- Trying to insert media_file records for subsequent backups fails with error 23505 (duplicate key)
+- Users see a media count but "No media files found" when expanding the section
+
+**Solution**: This migration:
+- Removes the unique constraint on `file_path` alone
+- Adds a composite unique constraint on `(backup_id, file_path)`
+- Allows the same media file in storage to be linked to multiple different backups
+
 **When to apply**: Apply this migration if you're experiencing issues where:
 - Media files show a count but don't appear when expanded
 - Logs show "0 new records inserted" for media files
