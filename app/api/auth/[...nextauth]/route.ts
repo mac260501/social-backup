@@ -1,4 +1,4 @@
-import NextAuth from "next-auth"
+import NextAuth, { NextAuthOptions } from "next-auth"
 import TwitterProvider from "next-auth/providers/twitter"
 import { createClient } from '@supabase/supabase-js'
 
@@ -7,7 +7,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const handler = NextAuth({
+export const authOptions: NextAuthOptions = {
   providers: [
     TwitterProvider({
       clientId: process.env.TWITTER_CLIENT_ID!,
@@ -27,7 +27,7 @@ const handler = NextAuth({
             twitter_user_id: profile.data?.id,
             updated_at: new Date().toISOString(),
           })
-        
+
         if (error) {
           console.error('Error saving user:', error)
         }
@@ -51,6 +51,8 @@ const handler = NextAuth({
       return token
     },
   },
-})
+}
+
+const handler = NextAuth(authOptions)
 
 export { handler as GET, handler as POST }

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { verifyBackupOwnership } from '@/lib/auth-helpers'
 
 // Use service role for backend operations (bypasses RLS)
 const supabase = createClient(
@@ -9,11 +12,30 @@ const supabase = createClient(
 
 export async function DELETE(request: Request) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions)
+    if (!session || !session.user?.id) {
+      return NextResponse.json({
+        success: false,
+        error: 'Unauthorized'
+      }, { status: 401 })
+    }
+
     const { searchParams } = new URL(request.url)
     const backupId = searchParams.get('backupId')
 
     if (!backupId) {
       return NextResponse.json({ success: false, error: 'Backup ID is required' }, { status: 400 })
+    }
+
+    // Verify ownership - user must own the backup to delete it
+    const isOwner = await verifyBackupOwnership(backupId, session.user.id)
+    if (!isOwner) {
+      console.warn(`[Security] User ${session.user.id} attempted to delete backup ${backupId} they don't own`)
+      return NextResponse.json({
+        success: false,
+        error: 'Forbidden - you do not have permission to delete this backup'
+      }, { status: 403 })
     }
 
     console.log(`[Delete Backup] Starting deletion for backup ${backupId}`)

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { verifyMediaOwnership } from '@/lib/auth-helpers'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -8,11 +11,33 @@ const supabase = createClient(
 
 export async function GET(request: Request) {
   try {
+    // Check authentication
+    const session = await getServerSession(authOptions)
+    if (!session || !session.user?.id) {
+      return NextResponse.json({
+        success: false,
+        error: 'Unauthorized'
+      }, { status: 401 })
+    }
+
     const { searchParams } = new URL(request.url)
     const backupId = searchParams.get('backupId')
 
     if (!backupId) {
-      return NextResponse.json({ success: false, error: 'Backup ID is required' }, { status: 400 })
+      return NextResponse.json({
+        success: false,
+        error: 'Backup ID is required'
+      }, { status: 400 })
+    }
+
+    // Verify ownership - user must own the backup to view its media
+    const isOwner = await verifyMediaOwnership(backupId, session.user.id)
+    if (!isOwner) {
+      console.warn(`[Security] User ${session.user.id} attempted to access media for backup ${backupId} they don't own`)
+      return NextResponse.json({
+        success: false,
+        error: 'Forbidden - you do not have access to this backup'
+      }, { status: 403 })
     }
 
     const { data: mediaFiles, error } = await supabase
