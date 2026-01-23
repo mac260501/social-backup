@@ -223,32 +223,57 @@ export default function BackupsPage() {
 
                 {/* Stats Summary */}
                 {backup.stats && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-4">
-                    <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">{backup.stats.tweets?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
-                    </div>
-                    <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">{backup.stats.media_files?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Media</div>
-                    </div>
-                    <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400">{backup.stats.followers?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Followers</div>
-                    </div>
-                    <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-green-600 dark:text-green-400">{backup.stats.following?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Following</div>
-                    </div>
-                    <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-red-600 dark:text-red-400">{backup.stats.likes?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Likes</div>
-                    </div>
-                    <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 sm:p-3 text-center">
-                      <div className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400">{backup.stats.dms?.toLocaleString() || 0}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">DMs</div>
-                    </div>
-                  </div>
+                  <>
+                    {backup.backup_source === 'archive_upload' ? (
+                      /* Archive backups: Show all 6 stats */
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 mb-4">
+                        <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">{backup.stats.tweets?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
+                        </div>
+                        <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">{backup.stats.media_files?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Media</div>
+                        </div>
+                        <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400">{backup.stats.followers?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Followers</div>
+                        </div>
+                        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-green-600 dark:text-green-400">{backup.stats.following?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Following</div>
+                        </div>
+                        <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-red-600 dark:text-red-400">{backup.stats.likes?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Likes</div>
+                        </div>
+                        <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-400">{backup.stats.dms?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">DMs</div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Scraped backups: Show only 4 stats (tweets, media, followers, following) */
+                      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4">
+                        <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-blue-600 dark:text-blue-400">{backup.stats.tweets?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
+                        </div>
+                        <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-orange-600 dark:text-orange-400">{backup.stats.media_files?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Media</div>
+                        </div>
+                        <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-purple-600 dark:text-purple-400">{backup.stats.followers?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Followers</div>
+                        </div>
+                        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-2 sm:p-3 text-center">
+                          <div className="text-xl sm:text-2xl font-bold text-green-600 dark:text-green-400">{backup.stats.following?.toLocaleString() || 0}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400 mt-1">Following</div>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {/* Expandable Data Sections */}
