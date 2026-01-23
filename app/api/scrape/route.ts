@@ -80,6 +80,7 @@ export async function POST(request: Request) {
         following: result.following.length,
         likes: 0,
         dms: 0,
+        media_files: 0,
       },
       file_size: 0, // No file for scraping
       archive_date: result.metadata.scraped_at,
