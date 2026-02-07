@@ -4,15 +4,25 @@ import { useState } from 'react'
 
 interface MediaTabProps {
   tweets: any[]
+  searchQuery?: string
 }
 
-export function MediaTab({ tweets }: MediaTabProps) {
+export function MediaTab({ tweets, searchQuery = '' }: MediaTabProps) {
   const [selectedMedia, setSelectedMedia] = useState<any>(null)
 
   // Filter tweets that have media
-  const tweetsWithMedia = tweets.filter(tweet =>
+  let tweetsWithMedia = tweets.filter(tweet =>
     tweet.media && tweet.media.length > 0
   )
+
+  // Apply search filter
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase()
+    tweetsWithMedia = tweetsWithMedia.filter(tweet =>
+      tweet.full_text?.toLowerCase().includes(q) ||
+      tweet.text?.toLowerCase().includes(q)
+    )
+  }
 
   // Flatten all media items with their parent tweet
   const allMedia = tweetsWithMedia.flatMap(tweet =>

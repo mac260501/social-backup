@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { SearchBar } from '@/components/SearchBar'
 import { TweetsTab } from '@/components/backup-tabs/TweetsTab'
 import { MediaTab } from '@/components/backup-tabs/MediaTab'
 import { DMsTab } from '@/components/backup-tabs/DMsTab'
@@ -99,23 +100,19 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
           {/* Search Bar */}
           <div className="py-3">
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search backup..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full px-4 py-2 pl-10 bg-gray-100 dark:bg-gray-700 border-none rounded-lg text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:ring-2 focus:ring-blue-500"
-              />
-              <svg
-                className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
+            <SearchBar
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder={
+                activeTab === 'tweets'
+                  ? 'Search tweets...'
+                  : activeTab === 'people'
+                  ? 'Search people...'
+                  : activeTab === 'dms'
+                  ? 'Search messages...'
+                  : 'Search backup...'
+              }
+            />
           </div>
 
           {/* Tabs */}
@@ -147,7 +144,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         {activeTab === 'tweets' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
             {backup.data?.tweets && backup.data.tweets.length > 0 ? (
-              <TweetsTab tweets={backup.data.tweets} />
+              <TweetsTab tweets={backup.data.tweets} searchQuery={searchQuery} />
             ) : (
               <div className="p-12 text-center text-gray-500 dark:text-gray-400">
                 No tweets found
@@ -159,7 +156,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         {activeTab === 'media' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             {backup.data?.tweets && backup.data.tweets.length > 0 ? (
-              <MediaTab tweets={backup.data.tweets} />
+              <MediaTab tweets={backup.data.tweets} searchQuery={searchQuery} />
             ) : (
               <p className="text-gray-500 dark:text-gray-400">No media found</p>
             )}
@@ -170,7 +167,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Direct Messages</h2>
             {backup.data?.direct_messages && backup.data.direct_messages.length > 0 ? (
-              <DMsTab dms={backup.data.direct_messages} userId={backup.userId} />
+              <DMsTab dms={backup.data.direct_messages} userId={backup.userId} searchQuery={searchQuery} />
             ) : (
               <p className="text-gray-500 dark:text-gray-400">No direct messages found</p>
             )}

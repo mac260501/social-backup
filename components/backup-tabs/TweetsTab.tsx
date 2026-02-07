@@ -5,13 +5,14 @@ import { TweetCard } from '@/components/tweet/TweetCard'
 
 interface TweetsTabProps {
   tweets: any[]
+  searchQuery?: string
 }
 
 type FilterType = 'all' | 'original' | 'retweets' | 'replies'
 type SortType = 'newest' | 'oldest' | 'most-liked'
 type DateRange = 'all' | '30-days' | '6-months' | '1-year'
 
-export function TweetsTab({ tweets }: TweetsTabProps) {
+export function TweetsTab({ tweets, searchQuery = '' }: TweetsTabProps) {
   const [filter, setFilter] = useState<FilterType>('all')
   const [sort, setSort] = useState<SortType>('newest')
   const [dateRange, setDateRange] = useState<DateRange>('all')
@@ -20,6 +21,17 @@ export function TweetsTab({ tweets }: TweetsTabProps) {
   // Filter and sort tweets
   const filteredAndSortedTweets = useMemo(() => {
     let result = [...tweets]
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      result = result.filter(
+        (tweet) =>
+          tweet.full_text?.toLowerCase().includes(q) ||
+          tweet.user?.screen_name?.toLowerCase().includes(q) ||
+          tweet.user?.name?.toLowerCase().includes(q)
+      )
+    }
 
     // Apply type filter
     if (filter === 'original') {
@@ -59,7 +71,7 @@ export function TweetsTab({ tweets }: TweetsTabProps) {
     }
 
     return result
-  }, [tweets, filter, sort, dateRange])
+  }, [tweets, filter, sort, dateRange, searchQuery])
 
   const visibleTweets = filteredAndSortedTweets.slice(0, visibleCount)
   const hasMore = visibleCount < filteredAndSortedTweets.length

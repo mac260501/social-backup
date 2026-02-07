@@ -7,9 +7,10 @@ import { MessageThread } from '../dm/MessageThread'
 interface DMsTabProps {
   dms: any[]
   userId: string
+  searchQuery?: string
 }
 
-export function DMsTab({ dms, userId }: DMsTabProps) {
+export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
 
   // Group DMs by conversation
@@ -55,7 +56,16 @@ export function DMsTab({ dms, userId }: DMsTabProps) {
       .sort((a, b) =>
         new Date(b.lastMessageDate).getTime() - new Date(a.lastMessageDate).getTime()
       )
-  }, [dms, userId])
+      .filter((conversation) => {
+        // Apply search filter
+        if (!searchQuery.trim()) return true
+        const q = searchQuery.toLowerCase()
+        return (
+          conversation.participant?.toLowerCase().includes(q) ||
+          conversation.messages.some((msg: any) => msg.text?.toLowerCase().includes(q))
+        )
+      })
+  }, [dms, userId, searchQuery])
 
   const selectedConversation = useMemo(
     () => conversations.find((c) => c.id === selectedConversationId),
