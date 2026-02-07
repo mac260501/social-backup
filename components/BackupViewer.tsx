@@ -4,6 +4,11 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { TweetsTab } from '@/components/backup-tabs/TweetsTab'
+import { MediaTab } from '@/components/backup-tabs/MediaTab'
+import { DMsTab } from '@/components/backup-tabs/DMsTab'
+import { PeopleTab } from '@/components/backup-tabs/PeopleTab'
+import { StatsTab } from '@/components/backup-tabs/StatsTab'
+import { RawDataTab } from '@/components/backup-tabs/RawDataTab'
 
 interface BackupViewerProps {
   backup: any
@@ -153,8 +158,11 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
         {activeTab === 'media' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Media</h2>
-            <p className="text-gray-500 dark:text-gray-400">Media view coming soon...</p>
+            {backup.data?.tweets && backup.data.tweets.length > 0 ? (
+              <MediaTab tweets={backup.data.tweets} />
+            ) : (
+              <p className="text-gray-500 dark:text-gray-400">No media found</p>
+            )}
           </div>
         )}
 
@@ -162,11 +170,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Direct Messages</h2>
             {backup.data?.direct_messages && backup.data.direct_messages.length > 0 ? (
-              <div className="space-y-4">
-                <pre className="text-sm text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-4 rounded overflow-auto max-h-96">
-                  {JSON.stringify(backup.data.direct_messages.slice(0, 10), null, 2)}
-                </pre>
-              </div>
+              <DMsTab dms={backup.data.direct_messages} userId={backup.userId} />
             ) : (
               <p className="text-gray-500 dark:text-gray-400">No direct messages found</p>
             )}
@@ -175,67 +179,22 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
         {activeTab === 'people' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">People</h2>
-            <p className="text-gray-500 dark:text-gray-400">People view coming soon...</p>
+            <PeopleTab
+              followers={backup.data?.followers || []}
+              following={backup.data?.following || []}
+            />
           </div>
         )}
 
         {activeTab === 'stats' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Statistics</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4">
-                <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                  {backup.stats?.tweets?.toLocaleString() || 0}
-                </div>
-                <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">Tweets</div>
-              </div>
-              <div className="bg-purple-50 dark:bg-purple-900/20 rounded-lg p-4">
-                <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-                  {backup.stats?.followers?.toLocaleString() || 0}
-                </div>
-                <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">Followers</div>
-              </div>
-              <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4">
-                <div className="text-2xl font-bold text-green-600 dark:text-green-400">
-                  {backup.stats?.following?.toLocaleString() || 0}
-                </div>
-                <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">Following</div>
-              </div>
-              {backup.stats?.media_files > 0 && (
-                <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-4">
-                  <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-                    {backup.stats.media_files.toLocaleString()}
-                  </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">Media Files</div>
-                </div>
-              )}
-              {backup.stats?.likes > 0 && (
-                <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4">
-                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">
-                    {backup.stats.likes.toLocaleString()}
-                  </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">Likes</div>
-                </div>
-              )}
-              {backup.stats?.dms > 0 && (
-                <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-4">
-                  <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-                    {backup.stats.dms.toLocaleString()}
-                  </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">DMs</div>
-                </div>
-              )}
-            </div>
+            <StatsTab backup={backup} tweets={backup.data?.tweets || []} />
           </div>
         )}
 
         {activeTab === 'raw' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Raw Data</h2>
-            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-4 rounded overflow-auto max-h-screen">
-              {JSON.stringify(backup, null, 2)}
-            </pre>
+            <RawDataTab backup={backup} />
           </div>
         )}
       </main>
