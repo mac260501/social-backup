@@ -51,9 +51,23 @@ export async function GET(request: Request) {
       throw error
     }
 
+    // Generate signed URLs for each media file (valid for 1 hour)
+    const mediaWithUrls = await Promise.all(
+      (mediaFiles || []).map(async (media) => {
+        const { data: signedUrlData } = await supabase.storage
+          .from('twitter-media')
+          .createSignedUrl(media.file_path, 3600) // 1 hour expiry
+
+        return {
+          ...media,
+          signedUrl: signedUrlData?.signedUrl || null
+        }
+      })
+    )
+
     return NextResponse.json({
       success: true,
-      mediaFiles: mediaFiles || []
+      mediaFiles: mediaWithUrls
     })
   } catch (error) {
     console.error('Error:', error)

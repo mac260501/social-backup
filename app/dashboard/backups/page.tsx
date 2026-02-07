@@ -325,27 +325,43 @@ export default function BackupsPage() {
                                 Loading media files...
                               </div>
                             ) : mediaFiles[backup.id] && mediaFiles[backup.id].length > 0 ? (
-                              <div className="space-y-2">
-                                {mediaFiles[backup.id].slice(0, 15).map((media: any, index: number) => (
-                                  <div key={index} className="bg-gray-50 dark:bg-gray-900 p-3 rounded text-xs">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="flex-1 min-w-0">
-                                        <div className="font-semibold text-gray-900 dark:text-white truncate">
-                                          {media.file_name}
-                                        </div>
-                                        <div className="text-gray-600 dark:text-gray-400 mt-1">
-                                          Type: <span className="text-orange-600 dark:text-orange-400">{media.media_type}</span>
-                                          {' • '}
-                                          Size: {(media.file_size / 1024).toFixed(1)} KB
-                                          {' • '}
-                                          {media.mime_type}
-                                        </div>
+                              <div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                  {mediaFiles[backup.id].slice(0, 15).map((media: any, index: number) => (
+                                    <div key={index} className="relative group">
+                                      <div className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden">
+                                        {media.mime_type?.startsWith('image/') ? (
+                                          <img
+                                            src={media.signedUrl}
+                                            alt={media.file_name}
+                                            className="w-full h-full object-cover hover:scale-105 transition-transform cursor-pointer"
+                                            onClick={() => window.open(media.signedUrl, '_blank')}
+                                          />
+                                        ) : media.mime_type?.startsWith('video/') ? (
+                                          <video
+                                            src={media.signedUrl}
+                                            controls
+                                            className="w-full h-full object-cover"
+                                          />
+                                        ) : (
+                                          <div className="w-full h-full flex items-center justify-center text-gray-400 dark:text-gray-500">
+                                            <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                            </svg>
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="mt-1 text-xs text-gray-600 dark:text-gray-400 truncate" title={media.file_name}>
+                                        {media.file_name}
+                                      </div>
+                                      <div className="text-xs text-gray-500 dark:text-gray-500">
+                                        {(media.file_size / 1024).toFixed(1)} KB
                                       </div>
                                     </div>
-                                  </div>
-                                ))}
+                                  ))}
+                                </div>
                                 {mediaFiles[backup.id].length > 15 && (
-                                  <div className="text-center text-gray-500 dark:text-gray-400 text-xs py-2">
+                                  <div className="text-center text-gray-500 dark:text-gray-400 text-xs py-3 mt-3 border-t dark:border-gray-700">
                                     ... and {mediaFiles[backup.id].length - 15} more media files
                                   </div>
                                 )}
