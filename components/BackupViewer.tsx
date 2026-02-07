@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { TweetsTab } from '@/components/backup-tabs/TweetsTab'
 
 interface BackupViewerProps {
   backup: any
@@ -139,21 +140,13 @@ export function BackupViewer({ backup }: BackupViewerProps) {
       {/* Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'tweets' && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Tweets</h2>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
             {backup.data?.tweets && backup.data.tweets.length > 0 ? (
-              <div className="space-y-4">
-                <pre className="text-sm text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-4 rounded overflow-auto max-h-96">
-                  {JSON.stringify(backup.data.tweets.slice(0, 10), null, 2)}
-                </pre>
-                {backup.data.tweets.length > 10 && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    ... and {backup.data.tweets.length - 10} more tweets
-                  </p>
-                )}
-              </div>
+              <TweetsTab tweets={backup.data.tweets} />
             ) : (
-              <p className="text-gray-500 dark:text-gray-400">No tweets found</p>
+              <div className="p-12 text-center text-gray-500 dark:text-gray-400">
+                No tweets found
+              </div>
             )}
           </div>
         )}
