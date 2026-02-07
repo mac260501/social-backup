@@ -132,7 +132,7 @@ export function RawDataTab({ backup }: RawDataTabProps) {
               className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800"
             >
               {/* Section Header */}
-              <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-750">
+              <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700">
                 <button
                   onClick={() => toggleSection(section.name)}
                   className="flex items-center gap-2 flex-1 text-left"
@@ -181,8 +181,8 @@ export function RawDataTab({ backup }: RawDataTabProps) {
 
               {/* Section Content */}
               {isExpanded && (
-                <div className="p-4 max-h-96 overflow-auto bg-gray-900">
-                  <pre className="text-xs text-gray-300 font-mono">
+                <div className="p-4 max-h-96 overflow-auto bg-gray-100 dark:bg-gray-900">
+                  <pre className="text-xs text-gray-900 dark:text-gray-300 font-mono">
                     <code className="language-json">
                       {JSON.stringify(section.data, null, 2)}
                     </code>

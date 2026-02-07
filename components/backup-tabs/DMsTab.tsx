@@ -18,23 +18,29 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
     const conversationMap = new Map<string, any>()
 
     dms.forEach((dm) => {
-      const conversationId = dm.conversationId || dm.participant || 'unknown'
+      // Handle various Twitter DM data structures
+      const conversationId = dm.conversationId || dm.dmConversationId || dm.id || 'unknown'
+      const messageText = dm.text || dm.messageCreate?.text || ''
+      const senderId = dm.senderId || dm.messageCreate?.senderId || dm.senderId
+      const recipientId = dm.recipientId || dm.messageCreate?.recipientId
+      const createdAt = dm.createdAt || dm.createdAt || dm.created_at || new Date().toISOString()
+      const participant = dm.participant || dm.recipientScreenName || dm.senderScreenName || 'Unknown'
 
       if (!conversationMap.has(conversationId)) {
         conversationMap.set(conversationId, {
           id: conversationId,
-          participant: dm.participant || 'Unknown',
+          participant: participant,
           messages: [],
-          participants: dm.participants || [userId, dm.participant]
+          participants: dm.participants || [userId, participant]
         })
       }
 
       conversationMap.get(conversationId)!.messages.push({
-        text: dm.text,
-        senderId: dm.senderId,
-        recipientId: dm.recipientId,
-        createdAt: dm.createdAt,
-        media: dm.media
+        text: messageText,
+        senderId: senderId,
+        recipientId: recipientId,
+        createdAt: createdAt,
+        media: dm.media || dm.messageCreate?.mediaUrls || []
       })
     })
 

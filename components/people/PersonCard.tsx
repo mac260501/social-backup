@@ -31,12 +31,28 @@ export function PersonCard({ person }: PersonCardProps) {
     return name.slice(0, 2).toUpperCase()
   }
 
-  const displayName = person.accountDisplayName || person.userLink || 'Unknown'
-  const handle = person.userLink || person.accountDisplayName || ''
-  const bio = person.bio || ''
-  const profileUrl = handle.startsWith('@')
-    ? `https://twitter.com/${handle.slice(1)}`
-    : `https://twitter.com/${handle}`
+  const displayName = person.accountDisplayName || person.screenName || person.name || 'Unknown'
+  const handle = person.userLink || person.screenName || person.screen_name || ''
+  const bio = person.bio || person.description || ''
+
+  // Generate proper profile URL
+  const getProfileUrl = () => {
+    // If userLink is already a full URL, use it
+    if (handle.startsWith('http://') || handle.startsWith('https://')) {
+      return handle
+    }
+
+    // If accountId exists, use user ID URL
+    if (person.accountId) {
+      return `https://twitter.com/intent/user?user_id=${person.accountId}`
+    }
+
+    // Otherwise use handle/screen name
+    const cleanHandle = handle.replace('@', '')
+    return `https://twitter.com/${cleanHandle}`
+  }
+
+  const profileUrl = getProfileUrl()
 
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 hover:shadow-md transition-shadow bg-white dark:bg-gray-800">
