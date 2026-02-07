@@ -71,7 +71,7 @@ export function TweetsTab({ tweets }: TweetsTabProps) {
   return (
     <div>
       {/* Filters and Sort Controls */}
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-10 p-4 space-y-3">
+      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 space-y-3">
         {/* Filter Buttons */}
         <div className="flex flex-wrap gap-2">
           <button
