@@ -31,10 +31,19 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
     dmArray.forEach((dm) => {
       // Check if this is a conversation object with messages inside
       if (dm.messages && Array.isArray(dm.messages)) {
-        // Twitter export format: { conversationId: "...", messages: [...] }
-        const conversationId = dm.conversationId || dm.dmConversationId || 'unknown'
-        const participants = dm.participants || []
-        const participant = participants.find((p: string) => p !== userId) || 'Unknown'
+        // Twitter export format: { conversation_id: "...", messages: [...] }
+        const conversationId = dm.conversation_id || dm.conversationId || dm.dmConversationId || 'unknown'
+
+        // Extract participants from conversation_id (format: "userId1-userId2")
+        let participants: string[] = dm.participants || []
+        let participant = 'Unknown'
+
+        if (!participants.length && conversationId.includes('-')) {
+          participants = conversationId.split('-')
+        }
+
+        // Find the other participant (not the current user)
+        participant = participants.find((p: string) => p !== userId) || participants[0] || 'Unknown'
 
         if (!conversationMap.has(conversationId)) {
           conversationMap.set(conversationId, {
@@ -48,27 +57,27 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
         // Process each message in the conversation
         dm.messages.forEach((msg: any) => {
           const messageData = msg.messageCreate || msg
-          const messageText = messageData.text || messageData.messageText || messageData.content || ''
-          const senderId = messageData.senderId || messageData.sender_id || ''
-          const recipientId = messageData.recipientId || messageData.recipient_id || ''
-          const createdAt = messageData.createdAt || messageData.created_at || msg.createdAt || new Date().toISOString()
+          const messageText = messageData.text || msg.text || messageData.messageText || messageData.content || ''
+          const senderId = messageData.sender_id || messageData.senderId || msg.sender_id || ''
+          const recipientId = messageData.recipient_id || messageData.recipientId || msg.recipient_id || ''
+          const createdAt = messageData.created_at || messageData.createdAt || msg.created_at || new Date().toISOString()
 
           conversationMap.get(conversationId)!.messages.push({
             text: messageText,
             senderId: senderId,
             recipientId: recipientId,
             createdAt: createdAt,
-            media: messageData.mediaUrls || messageData.media || []
+            media: messageData.mediaUrls || messageData.media || msg.media || []
           })
         })
       } else {
         // Flat message format: each DM is a separate message
-        const conversationId = dm.conversationId || dm.dmConversationId || dm.id || 'unknown'
+        const conversationId = dm.conversation_id || dm.conversationId || dm.dmConversationId || dm.id || 'unknown'
         const messageData = dm.messageCreate || dm
-        const messageText = messageData.text || messageData.messageText || messageData.content || dm.text || ''
-        const senderId = messageData.senderId || messageData.sender_id || dm.senderId || ''
-        const recipientId = messageData.recipientId || messageData.recipient_id || dm.recipientId || ''
-        const createdAt = messageData.createdAt || messageData.created_at || dm.createdAt || dm.created_at || new Date().toISOString()
+        const messageText = messageData.text || dm.text || messageData.messageText || messageData.content || ''
+        const senderId = messageData.sender_id || messageData.senderId || dm.sender_id || dm.senderId || ''
+        const recipientId = messageData.recipient_id || messageData.recipientId || dm.recipient_id || dm.recipientId || ''
+        const createdAt = messageData.created_at || messageData.createdAt || dm.created_at || dm.createdAt || new Date().toISOString()
         const participant = dm.participant || dm.recipientScreenName || dm.senderScreenName || 'Unknown'
 
         if (!conversationMap.has(conversationId)) {
