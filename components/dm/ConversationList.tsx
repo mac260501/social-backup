@@ -13,6 +13,7 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
         const lastMessage = conversation.messages?.[conversation.messages.length - 1]
         const convId = conversation.id || conversation.conversationId
         const isSelected = selectedId === convId
+        const participantUrl = `https://twitter.com/intent/user?user_id=${conversation.participant || 'Unknown'}`
 
         return (
           <button
@@ -31,9 +32,15 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
               {/* Info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline justify-between gap-2">
-                  <h3 className="font-semibold text-gray-900 dark:text-white truncate">
+                  <a
+                    href={participantUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="font-semibold text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 hover:underline truncate"
+                  >
                     {conversation.participant || 'Unknown'}
-                  </h3>
+                  </a>
                   <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     {lastMessage?.createdAt && new Date(lastMessage.createdAt).toLocaleDateString('en-US', {
                       month: 'short',

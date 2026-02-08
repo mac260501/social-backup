@@ -13,6 +13,9 @@ interface DMsTabProps {
 export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
 
+  // Normalize userId to string for consistent comparison
+  const normalizedUserId = String(userId)
+
   // Group DMs by conversation
   const conversations = useMemo(() => {
     const conversationMap = new Map<string, any>()
@@ -42,8 +45,8 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
           participants = conversationId.split('-')
         }
 
-        // Find the other participant (not the current user)
-        participant = participants.find((p: string) => p !== userId) || participants[0] || 'Unknown'
+        // Find the other participant (not the current user) - ensure string comparison
+        participant = participants.find((p: string) => String(p) !== normalizedUserId) || participants[0] || 'Unknown'
 
         if (!conversationMap.has(conversationId)) {
           conversationMap.set(conversationId, {
@@ -126,7 +129,7 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
           conversation.messages.some((msg: any) => msg.text?.toLowerCase().includes(q))
         )
       })
-  }, [dms, userId, searchQuery])
+  }, [dms, normalizedUserId, searchQuery])
 
   const selectedConversation = useMemo(
     () => conversations.find((c) => c.id === selectedConversationId),
@@ -159,7 +162,7 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
 
       {/* Right Pane - Message Thread */}
       <div className="hidden lg:flex lg:w-2/3">
-        <MessageThread conversation={selectedConversation} userId={userId} />
+        <MessageThread conversation={selectedConversation} userId={normalizedUserId} />
       </div>
 
       {/* Mobile: Show thread only when selected (overlay) */}
@@ -171,7 +174,7 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
           >
             ← Back to conversations
           </button>
-          <MessageThread conversation={selectedConversation} userId={userId} />
+          <MessageThread conversation={selectedConversation} userId={normalizedUserId} />
         </div>
       )}
     </div>

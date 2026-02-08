@@ -24,18 +24,27 @@ export function MessageThread({ conversation, userId }: MessageThreadProps) {
     )
   }
 
-  // Get participant name (not the current user)
+  // Get participant name (not the current user) - ensure string comparison
+  const normalizedUserId = String(userId)
   const participant = conversation.participant ||
-    conversation.participants?.find((p: string) => p !== userId) ||
+    conversation.participants?.find((p: string) => String(p) !== normalizedUserId) ||
     'Unknown'
+
+  // Generate Twitter profile URL for participant
+  const participantUrl = `https://twitter.com/intent/user?user_id=${participant}`
 
   return (
     <div className="flex-1 flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-gray-200 dark:border-gray-700 p-4 bg-white dark:bg-gray-800">
-        <h3 className="font-semibold text-lg text-gray-900 dark:text-white">
+        <a
+          href={participantUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold text-lg text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 hover:underline"
+        >
           {participant}
-        </h3>
+        </a>
         <p className="text-sm text-gray-500 dark:text-gray-400">
           {conversation.messages?.length || 0} messages
         </p>
@@ -49,7 +58,7 @@ export function MessageThread({ conversation, userId }: MessageThreadProps) {
               <MessageBubble
                 key={idx}
                 message={message}
-                isFromUser={message.senderId === userId}
+                isFromUser={String(message.senderId) === normalizedUserId}
               />
             ))}
             <div ref={messagesEndRef} />
