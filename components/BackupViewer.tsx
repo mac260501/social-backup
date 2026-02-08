@@ -32,10 +32,17 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     })
   }
 
+  // Get DMs from multiple possible field names
+  const getDMs = () => {
+    return backup.data?.dms || backup.data?.direct_messages || backup.data?.directMessages || []
+  }
+
+  const dms = getDMs()
+
   const tabs = [
     { id: 'tweets' as Tab, label: 'Tweets', count: backup.stats?.tweets || 0 },
     { id: 'media' as Tab, label: 'Media', count: backup.stats?.media_files || 0 },
-    { id: 'dms' as Tab, label: 'DMs', count: backup.stats?.dms || 0 },
+    { id: 'dms' as Tab, label: 'DMs', count: dms.length || backup.stats?.dms || 0 },
     { id: 'people' as Tab, label: 'People', count: (backup.stats?.followers || 0) + (backup.stats?.following || 0) },
     { id: 'stats' as Tab, label: 'Stats', count: null },
     { id: 'raw' as Tab, label: 'Raw Data', count: null },
@@ -166,8 +173,8 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         {activeTab === 'dms' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Direct Messages</h2>
-            {backup.data?.direct_messages && backup.data.direct_messages.length > 0 ? (
-              <DMsTab dms={backup.data.direct_messages} userId={backup.userId} searchQuery={searchQuery} />
+            {dms && dms.length > 0 ? (
+              <DMsTab dms={dms} userId={backup.userId} searchQuery={searchQuery} />
             ) : (
               <p className="text-gray-500 dark:text-gray-400">No direct messages found</p>
             )}

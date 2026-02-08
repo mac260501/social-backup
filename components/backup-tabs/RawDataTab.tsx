@@ -78,8 +78,8 @@ export function RawDataTab({ backup }: RawDataTabProps) {
     },
     {
       name: 'DMs',
-      data: backup.data?.dms || [],
-      count: (backup.data?.dms || []).length
+      data: backup.data?.dms || backup.data?.direct_messages || backup.data?.directMessages || [],
+      count: (backup.data?.dms || backup.data?.direct_messages || backup.data?.directMessages || []).length
     }
   ]
 
