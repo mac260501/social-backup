@@ -25,7 +25,9 @@ export function MessageThread({ conversation, userId }: MessageThreadProps) {
   }
 
   // Get participant name (not the current user)
-  const participant = conversation.participants?.find((p: string) => p !== userId) || 'Unknown'
+  const participant = conversation.participant ||
+    conversation.participants?.find((p: string) => p !== userId) ||
+    'Unknown'
 
   return (
     <div className="flex-1 flex flex-col h-full">

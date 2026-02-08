@@ -25,7 +25,9 @@ export function MessageBubble({ message, isFromUser }: MessageBubbleProps) {
               : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-bl-sm'
           }`}
         >
-          <p className="whitespace-pre-wrap break-words">{message.text}</p>
+          <p className="whitespace-pre-wrap break-words">
+            {message.text || message.content || '[No message text]'}
+          </p>
 
           {/* Display media inline */}
           {message.media && message.media.length > 0 && (

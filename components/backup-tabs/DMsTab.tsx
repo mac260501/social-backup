@@ -17,31 +17,77 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
   const conversations = useMemo(() => {
     const conversationMap = new Map<string, any>()
 
-    dms.forEach((dm) => {
-      // Handle various Twitter DM data structures
-      const conversationId = dm.conversationId || dm.dmConversationId || dm.id || 'unknown'
-      const messageText = dm.text || dm.messageCreate?.text || ''
-      const senderId = dm.senderId || dm.messageCreate?.senderId || dm.senderId
-      const recipientId = dm.recipientId || dm.messageCreate?.recipientId
-      const createdAt = dm.createdAt || dm.createdAt || dm.created_at || new Date().toISOString()
-      const participant = dm.participant || dm.recipientScreenName || dm.senderScreenName || 'Unknown'
+    // Handle if DMs is an object with conversations inside
+    let dmArray = dms
+    if (!Array.isArray(dms) && typeof dms === 'object') {
+      // Might be { dmConversations: [...] } or similar
+      dmArray = dms.dmConversations || dms.conversations || Object.values(dms)
+    }
 
-      if (!conversationMap.has(conversationId)) {
-        conversationMap.set(conversationId, {
-          id: conversationId,
-          participant: participant,
-          messages: [],
-          participants: dm.participants || [userId, participant]
+    if (!Array.isArray(dmArray)) {
+      return []
+    }
+
+    dmArray.forEach((dm) => {
+      // Check if this is a conversation object with messages inside
+      if (dm.messages && Array.isArray(dm.messages)) {
+        // Twitter export format: { conversationId: "...", messages: [...] }
+        const conversationId = dm.conversationId || dm.dmConversationId || 'unknown'
+        const participants = dm.participants || []
+        const participant = participants.find((p: string) => p !== userId) || 'Unknown'
+
+        if (!conversationMap.has(conversationId)) {
+          conversationMap.set(conversationId, {
+            id: conversationId,
+            participant: participant,
+            messages: [],
+            participants: participants
+          })
+        }
+
+        // Process each message in the conversation
+        dm.messages.forEach((msg: any) => {
+          const messageData = msg.messageCreate || msg
+          const messageText = messageData.text || messageData.messageText || messageData.content || ''
+          const senderId = messageData.senderId || messageData.sender_id || ''
+          const recipientId = messageData.recipientId || messageData.recipient_id || ''
+          const createdAt = messageData.createdAt || messageData.created_at || msg.createdAt || new Date().toISOString()
+
+          conversationMap.get(conversationId)!.messages.push({
+            text: messageText,
+            senderId: senderId,
+            recipientId: recipientId,
+            createdAt: createdAt,
+            media: messageData.mediaUrls || messageData.media || []
+          })
+        })
+      } else {
+        // Flat message format: each DM is a separate message
+        const conversationId = dm.conversationId || dm.dmConversationId || dm.id || 'unknown'
+        const messageData = dm.messageCreate || dm
+        const messageText = messageData.text || messageData.messageText || messageData.content || dm.text || ''
+        const senderId = messageData.senderId || messageData.sender_id || dm.senderId || ''
+        const recipientId = messageData.recipientId || messageData.recipient_id || dm.recipientId || ''
+        const createdAt = messageData.createdAt || messageData.created_at || dm.createdAt || dm.created_at || new Date().toISOString()
+        const participant = dm.participant || dm.recipientScreenName || dm.senderScreenName || 'Unknown'
+
+        if (!conversationMap.has(conversationId)) {
+          conversationMap.set(conversationId, {
+            id: conversationId,
+            participant: participant,
+            messages: [],
+            participants: dm.participants || [userId, participant]
+          })
+        }
+
+        conversationMap.get(conversationId)!.messages.push({
+          text: messageText,
+          senderId: senderId,
+          recipientId: recipientId,
+          createdAt: createdAt,
+          media: messageData.mediaUrls || messageData.media || dm.media || []
         })
       }
-
-      conversationMap.get(conversationId)!.messages.push({
-        text: messageText,
-        senderId: senderId,
-        recipientId: recipientId,
-        createdAt: createdAt,
-        media: dm.media || dm.messageCreate?.mediaUrls || []
-      })
     })
 
     // Convert map to array and sort messages by date

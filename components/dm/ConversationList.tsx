@@ -10,13 +10,14 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
   return (
     <div className="divide-y divide-gray-200 dark:divide-gray-700">
       {conversations.map((conversation) => {
-        const lastMessage = conversation.messages[conversation.messages.length - 1]
-        const isSelected = selectedId === conversation.conversationId
+        const lastMessage = conversation.messages?.[conversation.messages.length - 1]
+        const convId = conversation.id || conversation.conversationId
+        const isSelected = selectedId === convId
 
         return (
           <button
-            key={conversation.conversationId}
-            onClick={() => onSelect(conversation.conversationId)}
+            key={convId}
+            onClick={() => onSelect(convId)}
             className={`w-full text-left p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition ${
               isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : ''
             }`}
@@ -34,14 +35,14 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
                     {conversation.participant || 'Unknown'}
                   </h3>
                   <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {new Date(lastMessage.createdAt).toLocaleDateString('en-US', {
+                    {lastMessage?.createdAt && new Date(lastMessage.createdAt).toLocaleDateString('en-US', {
                       month: 'short',
                       day: 'numeric'
                     })}
                   </span>
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400 truncate mt-1">
-                  {lastMessage.text || 'Media'}
+                  {lastMessage?.text || lastMessage?.content || 'Media'}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
                   {conversation.messages.length} messages
