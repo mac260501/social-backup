@@ -2,11 +2,23 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { createHash } from 'crypto'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+function createUuidFromString(str: string): string {
+  const hash = createHash('sha256').update(str).digest('hex')
+  return [
+    hash.substring(0, 8),
+    hash.substring(8, 12),
+    hash.substring(12, 16),
+    hash.substring(16, 20),
+    hash.substring(20, 32),
+  ].join('-')
+}
 
 export async function GET(request: Request) {
   try {
@@ -29,6 +41,9 @@ export async function GET(request: Request) {
       }, { status: 400 })
     }
 
+    // Convert user ID to UUID format for comparison
+    const userUuid = createUuidFromString(session.user.id)
+
     // Get backup and verify ownership
     const { data: backup, error: backupError } = await supabase
       .from('backups')
@@ -44,8 +59,8 @@ export async function GET(request: Request) {
     }
 
     // Verify user owns this backup
-    if (backup.user_id !== session.user.id) {
-      console.warn(`[Security] User ${session.user.id} attempted to download backup ${backupId} they don't own`)
+    if (backup.user_id !== userUuid) {
+      console.warn(`[Security] User ${userUuid} attempted to download backup ${backupId} they don't own`)
       return NextResponse.json({
         success: false,
         error: 'Forbidden - you do not have access to this backup'
