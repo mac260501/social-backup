@@ -93,19 +93,18 @@ export function MediaTab({ backupId, searchQuery = '' }: MediaTabProps) {
     )
   }
 
-  if (filteredMedia.length === 0) {
+  // Show empty state only if there are NO media files at all
+  if (mediaFiles.length === 0) {
     return (
       <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-        {searchQuery.trim()
-          ? 'No media files match your search'
-          : 'No media files found in this backup'}
+        No media files found in this backup
       </div>
     )
   }
 
   return (
     <div className="p-6">
-      {/* Filter Bar */}
+      {/* Filter Bar - Always visible when there are media files */}
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         {/* Media Type Filter */}
         <div className="flex gap-2">
@@ -147,8 +146,18 @@ export function MediaTab({ backupId, searchQuery = '' }: MediaTabProps) {
         </div>
       </div>
 
+      {/* Empty filtered results message */}
+      {filteredMedia.length === 0 && (
+        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+          {searchQuery.trim()
+            ? 'No media files match your search'
+            : `No ${mediaTypeFilter === 'images' ? 'photos' : mediaTypeFilter === 'videos' ? 'videos' : 'media files'} found`}
+        </div>
+      )}
+
       {/* Media Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      {filteredMedia.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {filteredMedia.map((media) => (
           <div
             key={media.id}
@@ -199,7 +208,8 @@ export function MediaTab({ backupId, searchQuery = '' }: MediaTabProps) {
             )}
           </div>
         ))}
-      </div>
+        </div>
+      )}
 
       {/* Lightbox Modal */}
       {selectedMedia && (
