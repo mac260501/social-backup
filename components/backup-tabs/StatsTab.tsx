@@ -10,7 +10,8 @@ import {
   UserPlus,
   Calendar,
   TrendingUp,
-  BarChart3
+  BarChart3,
+  Image
 } from 'lucide-react'
 
 interface StatsTabProps {
@@ -137,6 +138,23 @@ export function StatsTab({ backup, tweets }: StatsTabProps) {
           />
         </div>
       </div>
+
+      {/* Media Stats */}
+      {backup.stats?.media_files && backup.stats.media_files > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Media
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard
+              icon={Image}
+              label="Media Files"
+              value={(backup.stats.media_files || 0).toLocaleString()}
+              color="bg-cyan-500"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Engagement Stats */}
       <div>
