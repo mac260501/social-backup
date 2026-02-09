@@ -240,6 +240,121 @@ async function extractMediaFiles(
   return { mediaFiles, uploadedCount }
 }
 
+/**
+ * Update media URLs in tweets and DMs to point to Supabase Storage
+ */
+function updateMediaUrls(
+  tweets: any[],
+  directMessages: any[],
+  mediaFiles: any[],
+  userId: string
+): { tweets: any[], directMessages: any[] } {
+  // Create filename -> storage path mapping
+  const fileMap = new Map<string, string>()
+  mediaFiles.forEach(media => {
+    fileMap.set(media.file_name, media.file_path)
+  })
+
+  // Get Supabase public URL for a storage path
+  const getPublicUrl = (storagePath: string): string => {
+    const { data } = supabase.storage
+      .from('twitter-media')
+      .getPublicUrl(storagePath)
+    return data.publicUrl
+  }
+
+  // Extract filename from Twitter CDN URL or media object
+  const extractFilename = (url: string): string | null => {
+    if (!url) return null
+    // Handle URLs like: https://pbs.twimg.com/media/ABC123.jpg
+    // Extract: ABC123.jpg
+    const match = url.match(/\/([^\/]+\.(jpg|jpeg|png|gif|mp4|webp))$/i)
+    return match ? match[1] : null
+  }
+
+  // Update tweets
+  const updatedTweets = tweets.map(tweet => {
+    // Handle extended_entities.media
+    if (tweet.extended_entities?.media) {
+      tweet.extended_entities.media = tweet.extended_entities.media.map((media: any) => {
+        const filename = extractFilename(media.media_url || media.media_url_https)
+        if (filename && fileMap.has(filename)) {
+          const storagePath = fileMap.get(filename)!
+          const publicUrl = getPublicUrl(storagePath)
+          return {
+            ...media,
+            media_url: publicUrl,
+            media_url_https: publicUrl,
+          }
+        }
+        return media
+      })
+    }
+
+    // Handle entities.media
+    if (tweet.entities?.media) {
+      tweet.entities.media = tweet.entities.media.map((media: any) => {
+        const filename = extractFilename(media.media_url || media.media_url_https)
+        if (filename && fileMap.has(filename)) {
+          const storagePath = fileMap.get(filename)!
+          const publicUrl = getPublicUrl(storagePath)
+          return {
+            ...media,
+            media_url: publicUrl,
+            media_url_https: publicUrl,
+          }
+        }
+        return media
+      })
+    }
+
+    // Update direct media array if present
+    if (tweet.media) {
+      tweet.media = tweet.media.map((media: any) => {
+        const filename = extractFilename(media.media_url || media.url)
+        if (filename && fileMap.has(filename)) {
+          const storagePath = fileMap.get(filename)!
+          const publicUrl = getPublicUrl(storagePath)
+          return {
+            ...media,
+            media_url: publicUrl,
+            url: publicUrl,
+          }
+        }
+        return media
+      })
+    }
+
+    return tweet
+  })
+
+  // Update DMs
+  const updatedDMs = directMessages.map(dm => {
+    if (dm.messages) {
+      dm.messages = dm.messages.map((msg: any) => {
+        if (msg.media && Array.isArray(msg.media)) {
+          msg.media = msg.media.map((media: any) => {
+            const filename = extractFilename(media.url)
+            if (filename && fileMap.has(filename)) {
+              const storagePath = fileMap.get(filename)!
+              const publicUrl = getPublicUrl(storagePath)
+              return {
+                ...media,
+                url: publicUrl,
+              }
+            }
+            return media
+          })
+        }
+        return msg
+      })
+    }
+    return dm
+  })
+
+  return { tweets: updatedTweets, directMessages: updatedDMs }
+}
+
 export async function POST(request: Request) {
   let tmpPath = ''
   const fs = require('fs')
@@ -341,6 +456,10 @@ export async function POST(request: Request) {
         created_at: item.tweet?.created_at,
         retweet_count: item.tweet?.retweet_count,
         favorite_count: item.tweet?.favorite_count,
+        // Preserve media references for display in viewer
+        extended_entities: item.tweet?.extended_entities,
+        entities: item.tweet?.entities,
+        media: item.tweet?.extended_entities?.media || item.tweet?.entities?.media,
       })).filter((t: any) => t.id)
       stats.tweets = tweets.length
     }
@@ -405,6 +524,8 @@ export async function POST(request: Request) {
             recipient_id: recipientId,
             senderLink: senderId ? `https://twitter.com/intent/user?user_id=${senderId}` : undefined,
             recipientLink: recipientId ? `https://twitter.com/intent/user?user_id=${recipientId}` : undefined,
+            // Preserve media references for DMs
+            media: msg.messageCreate?.mediaUrls || msg.messageCreate?.media || [],
           }
         })
         return {
@@ -455,21 +576,41 @@ export async function POST(request: Request) {
 
     console.log(`Processed ${uploadedCount} media files (${mediaFiles.length} new records inserted)`)
 
+    // Update media URLs to point to Supabase Storage
+    console.log('Updating media URLs in backup data...')
+    const { tweets: updatedTweets, directMessages: updatedDMs } = updateMediaUrls(
+      tweets,
+      directMessages,
+      mediaFiles,
+      userUuid
+    )
+
     // Update stats to include media count
     const updatedStats = {
       ...stats,
       media_files: uploadedCount,
     }
 
-    // Update the backup record with the new stats including media count
+    // Update the backup record with the new stats AND updated media URLs
     const { error: updateError } = await supabase
       .from('backups')
-      .update({ stats: updatedStats })
+      .update({
+        stats: updatedStats,
+        data: {
+          tweets: updatedTweets,
+          followers,
+          following,
+          likes,
+          direct_messages: updatedDMs
+        }
+      })
       .eq('id', backupId)
 
     if (updateError) {
-      console.error('Failed to update backup stats:', updateError)
+      console.error('Failed to update backup:', updateError)
       // Don't fail the whole upload, just log the error
+    } else {
+      console.log('Successfully updated media URLs')
     }
 
     // Clean up temp file
