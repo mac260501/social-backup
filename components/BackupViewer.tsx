@@ -161,13 +161,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         )}
 
         {activeTab === 'media' && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            {backup.data?.tweets && backup.data.tweets.length > 0 ? (
-              <MediaTab tweets={backup.data.tweets} searchQuery={searchQuery} />
-            ) : (
-              <p className="text-gray-500 dark:text-gray-400">No media found</p>
-            )}
-          </div>
+          <MediaTab backupId={backup.id} searchQuery={searchQuery} />
         )}
 
         {activeTab === 'dms' && (

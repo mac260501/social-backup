@@ -1,150 +1,205 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { Spinner } from '@/components/SkeletonLoader'
 
 interface MediaTabProps {
-  tweets: any[]
+  backupId: string
   searchQuery?: string
 }
 
-export function MediaTab({ tweets, searchQuery = '' }: MediaTabProps) {
-  const [selectedMedia, setSelectedMedia] = useState<any>(null)
+interface MediaFile {
+  id: string
+  file_name: string
+  file_path: string
+  mime_type: string
+  media_type: string
+  signedUrl: string | null
+  created_at: string
+}
 
-  // Extract media from tweet (supports multiple Twitter data formats)
-  const getMediaFromTweet = (tweet: any) => {
-    // Try different possible locations for media
+export function MediaTab({ backupId, searchQuery = '' }: MediaTabProps) {
+  const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedMedia, setSelectedMedia] = useState<MediaFile | null>(null)
+
+  useEffect(() => {
+    async function fetchMedia() {
+      setLoading(true)
+      setError(null)
+
+      try {
+        const response = await fetch(`/api/media?backupId=${backupId}`)
+        const data = await response.json()
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to fetch media')
+        }
+
+        if (data.success && data.mediaFiles) {
+          setMediaFiles(data.mediaFiles)
+        }
+      } catch (err) {
+        console.error('Error fetching media:', err)
+        setError(err instanceof Error ? err.message : 'Failed to load media')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchMedia()
+  }, [backupId])
+
+  // Filter by search query (filename)
+  const filteredMedia = searchQuery.trim()
+    ? mediaFiles.filter(media =>
+        media.file_name.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : mediaFiles
+
+  // Determine if file is image or video
+  const isImage = (mimeType: string) => mimeType.startsWith('image/')
+  const isVideo = (mimeType: string) => mimeType.startsWith('video/')
+
+  if (loading) {
     return (
-      tweet.media ||
-      tweet.extended_entities?.media ||
-      tweet.entities?.media ||
-      tweet.tweet?.extended_entities?.media ||
-      tweet.tweet?.entities?.media ||
-      []
+      <div className="flex items-center justify-center py-12">
+        <Spinner size="lg" />
+      </div>
     )
   }
 
-  // Filter tweets that have media
-  let tweetsWithMedia = tweets.filter(tweet => {
-    const media = getMediaFromTweet(tweet)
-    return media && media.length > 0
-  })
-
-  // Apply search filter
-  if (searchQuery.trim()) {
-    const q = searchQuery.toLowerCase()
-    tweetsWithMedia = tweetsWithMedia.filter(tweet =>
-      tweet.full_text?.toLowerCase().includes(q) ||
-      tweet.text?.toLowerCase().includes(q)
+  if (error) {
+    return (
+      <div className="text-center py-12 text-red-500 dark:text-red-400">
+        Error: {error}
+      </div>
     )
   }
 
-  // Flatten all media items with their parent tweet
-  const allMedia = tweetsWithMedia.flatMap(tweet => {
-    const media = getMediaFromTweet(tweet)
-    return media.map((mediaItem: any) => ({
-      ...mediaItem,
-      tweet
-    }))
-  })
+  if (filteredMedia.length === 0) {
+    return (
+      <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+        {searchQuery.trim()
+          ? 'No media files match your search'
+          : 'No media files found in this backup'}
+      </div>
+    )
+  }
 
   return (
     <div className="p-6">
-      {allMedia.length > 0 ? (
-        <>
-          {/* Media Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {allMedia.map((media: any, index: number) => (
-              <div
-                key={index}
-                className="relative group aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden cursor-pointer"
-                onClick={() => setSelectedMedia(media)}
-              >
-                {media.type === 'photo' ? (
+      {/* Media Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {filteredMedia.map((media) => (
+          <div
+            key={media.id}
+            className="relative group aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden cursor-pointer"
+            onClick={() => setSelectedMedia(media)}
+          >
+            {media.signedUrl ? (
+              <>
+                {isImage(media.mime_type) ? (
                   <img
-                    src={media.media_url || media.url}
-                    alt="Media"
+                    src={media.signedUrl}
+                    alt={media.file_name}
                     className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                    loading="lazy"
                   />
-                ) : media.type === 'video' || media.type === 'animated_gif' ? (
+                ) : isVideo(media.mime_type) ? (
                   <video
-                    src={media.media_url || media.url}
+                    src={media.signedUrl}
                     className="w-full h-full object-cover"
                     muted
                   />
-                ) : null}
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-500">
+                    <p className="text-sm">{media.file_name}</p>
+                  </div>
+                )}
 
-                {/* Hover Overlay with Tweet Text */}
+                {/* Hover Overlay with Filename */}
                 <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-70 transition-opacity flex items-end p-4 opacity-0 group-hover:opacity-100">
-                  <p className="text-white text-sm line-clamp-3">
-                    {media.tweet.full_text || media.tweet.text}
+                  <p className="text-white text-sm line-clamp-2">
+                    {media.file_name}
                   </p>
                 </div>
 
                 {/* Video Icon */}
-                {(media.type === 'video' || media.type === 'animated_gif') && (
+                {isVideo(media.mime_type) && (
                   <div className="absolute top-2 right-2 bg-black bg-opacity-60 rounded-full p-2">
                     <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z" />
                     </svg>
                   </div>
                 )}
+              </>
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-gray-500">
+                <p className="text-sm">Unable to load media</p>
               </div>
-            ))}
+            )}
           </div>
+        ))}
+      </div>
 
-          {/* Lightbox Modal */}
-          {selectedMedia && (
-            <div
-              className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4"
+      {/* Lightbox Modal */}
+      {selectedMedia && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4"
+          onClick={() => setSelectedMedia(null)}
+        >
+          <div className="relative max-w-7xl max-h-full" onClick={(e) => e.stopPropagation()}>
+            {/* Close Button */}
+            <button
               onClick={() => setSelectedMedia(null)}
+              className="absolute top-4 right-4 text-white hover:text-gray-300 z-10"
             >
-              <div className="relative max-w-7xl max-h-full" onClick={(e) => e.stopPropagation()}>
-                {/* Close Button */}
-                <button
-                  onClick={() => setSelectedMedia(null)}
-                  className="absolute top-4 right-4 text-white hover:text-gray-300 z-10"
-                >
-                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
 
-                {/* Media Content */}
-                {selectedMedia.type === 'photo' ? (
+            {/* Media Content */}
+            {selectedMedia.signedUrl && (
+              <>
+                {isImage(selectedMedia.mime_type) ? (
                   <img
-                    src={selectedMedia.media_url || selectedMedia.url}
-                    alt="Media"
+                    src={selectedMedia.signedUrl}
+                    alt={selectedMedia.file_name}
                     className="max-w-full max-h-[80vh] object-contain rounded-lg"
                   />
-                ) : (
+                ) : isVideo(selectedMedia.mime_type) ? (
                   <video
-                    src={selectedMedia.media_url || selectedMedia.url}
+                    src={selectedMedia.signedUrl}
                     controls
                     autoPlay
                     className="max-w-full max-h-[80vh] object-contain rounded-lg"
                   />
-                )}
+                ) : null}
+              </>
+            )}
 
-                {/* Tweet Text Below */}
-                <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg p-4 max-w-2xl">
-                  <p className="text-gray-900 dark:text-white">
-                    {selectedMedia.tweet.full_text || selectedMedia.tweet.text}
-                  </p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                    {new Date(selectedMedia.tweet.created_at).toLocaleDateString('en-US', {
-                      month: 'long',
-                      day: 'numeric',
-                      year: 'numeric'
-                    })}
-                  </p>
-                </div>
-              </div>
+            {/* Filename and Info Below */}
+            <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg p-4 max-w-2xl">
+              <p className="text-gray-900 dark:text-white font-semibold">
+                {selectedMedia.file_name}
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Type: {selectedMedia.media_type} • {selectedMedia.mime_type}
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Uploaded: {new Date(selectedMedia.created_at).toLocaleDateString('en-US', {
+                  month: 'long',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: 'numeric'
+                })}
+              </p>
             </div>
-          )}
-        </>
-      ) : (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          No media found in your tweets
+          </div>
         </div>
       )}
     </div>
