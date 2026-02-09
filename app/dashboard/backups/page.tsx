@@ -10,10 +10,6 @@ export default function BackupsPage() {
   const router = useRouter()
   const [backups, setBackups] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedBackup, setSelectedBackup] = useState<any>(null)
-  const [expandedSection, setExpandedSection] = useState<string | null>(null)
-  const [mediaFiles, setMediaFiles] = useState<{ [key: string]: any[] }>({})
-  const [loadingMedia, setLoadingMedia] = useState<{ [key: string]: boolean }>({})
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -37,49 +33,6 @@ export default function BackupsPage() {
       console.error('Error fetching backups:', error)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const downloadBackup = (backup: any) => {
-    const dataStr = JSON.stringify(backup.data, null, 2)
-    const dataBlob = new Blob([dataStr], { type: 'application/json' })
-    const url = URL.createObjectURL(dataBlob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `twitter_backup_${new Date(backup.uploaded_at || backup.created_at).toISOString().split('T')[0]}.json`
-    link.click()
-  }
-
-  const fetchMediaFiles = async (backupId: string) => {
-    if (mediaFiles[backupId] || loadingMedia[backupId]) {
-      return // Already loaded or loading
-    }
-
-    setLoadingMedia({ ...loadingMedia, [backupId]: true })
-
-    try {
-      const response = await fetch(`/api/media?backupId=${encodeURIComponent(backupId)}`)
-      const result = await response.json()
-
-      if (result.success) {
-        setMediaFiles({ ...mediaFiles, [backupId]: result.mediaFiles || [] })
-      }
-    } catch (error) {
-      console.error('Error fetching media files:', error)
-      setMediaFiles({ ...mediaFiles, [backupId]: [] })
-    } finally {
-      setLoadingMedia({ ...loadingMedia, [backupId]: false })
-    }
-  }
-
-  const toggleSection = (backupId: string, section: string) => {
-    const key = `${backupId}-${section}`
-    const newExpandedSection = expandedSection === key ? null : key
-    setExpandedSection(newExpandedSection)
-
-    // Fetch media files when media section is expanded
-    if (section === 'media' && newExpandedSection === key) {
-      fetchMediaFiles(backupId)
     }
   }
 
@@ -201,16 +154,10 @@ export default function BackupsPage() {
                   </div>
                   <div className="flex flex-row sm:flex-row gap-2 w-full sm:w-auto">
                     <button
-                      onClick={() => setSelectedBackup(selectedBackup?.id === backup.id ? null : backup)}
-                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-xs sm:text-sm"
-                    >
-                      {selectedBackup?.id === backup.id ? 'Collapse' : 'Expand'}
-                    </button>
-                    <button
-                      onClick={() => downloadBackup(backup)}
+                      onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
                       className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 text-xs sm:text-sm"
                     >
-                      Download
+                      View Details
                     </button>
                     <button
                       onClick={() => deleteBackup(backup.id, 'backup')}
@@ -274,208 +221,6 @@ export default function BackupsPage() {
                       </div>
                     )}
                   </>
-                )}
-
-                {/* Expandable Data Sections */}
-                {selectedBackup?.id === backup.id && (
-                  <div className="mt-4 border-t dark:border-gray-700 pt-4 space-y-2">
-                    {/* Tweets Section */}
-                    {backup.data?.tweets && backup.data.tweets.length > 0 && (
-                      <div className="border dark:border-gray-700 rounded-lg">
-                        <button
-                          onClick={() => toggleSection(backup.id, 'tweets')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                        >
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Tweets ({backup.data.tweets.length})
-                          </span>
-                          <span className="text-gray-500 dark:text-gray-400">
-                            {expandedSection === `${backup.id}-tweets` ? '−' : '+'}
-                          </span>
-                        </button>
-                        {expandedSection === `${backup.id}-tweets` && (
-                          <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
-                              {JSON.stringify(backup.data.tweets.slice(0, 10), null, 2)}
-                              {backup.data.tweets.length > 10 && `\n\n... and ${backup.data.tweets.length - 10} more`}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Media Section */}
-                    {backup.stats?.media_files && backup.stats.media_files > 0 && (
-                      <div className="border dark:border-gray-700 rounded-lg">
-                        <button
-                          onClick={() => toggleSection(backup.id, 'media')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                        >
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Media Files ({backup.stats.media_files})
-                          </span>
-                          <span className="text-gray-500 dark:text-gray-400">
-                            {expandedSection === `${backup.id}-media` ? '−' : '+'}
-                          </span>
-                        </button>
-                        {expandedSection === `${backup.id}-media` && (
-                          <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            {loadingMedia[backup.id] ? (
-                              <div className="text-center py-4 text-gray-600 dark:text-gray-400">
-                                Loading media files...
-                              </div>
-                            ) : mediaFiles[backup.id] && mediaFiles[backup.id].length > 0 ? (
-                              <div>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                                  {mediaFiles[backup.id].slice(0, 15).map((media: any, index: number) => (
-                                    <div key={index} className="relative group">
-                                      <div className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden">
-                                        {media.mime_type?.startsWith('image/') ? (
-                                          <img
-                                            src={media.signedUrl}
-                                            alt={media.file_name}
-                                            className="w-full h-full object-cover hover:scale-105 transition-transform cursor-pointer"
-                                            onClick={() => window.open(media.signedUrl, '_blank')}
-                                          />
-                                        ) : media.mime_type?.startsWith('video/') ? (
-                                          <video
-                                            src={media.signedUrl}
-                                            controls
-                                            className="w-full h-full object-cover"
-                                          />
-                                        ) : (
-                                          <div className="w-full h-full flex items-center justify-center text-gray-400 dark:text-gray-500">
-                                            <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                                            </svg>
-                                          </div>
-                                        )}
-                                      </div>
-                                      <div className="mt-1 text-xs text-gray-600 dark:text-gray-400 truncate" title={media.file_name}>
-                                        {media.file_name}
-                                      </div>
-                                      <div className="text-xs text-gray-500 dark:text-gray-500">
-                                        {(media.file_size / 1024).toFixed(1)} KB
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                                {mediaFiles[backup.id].length > 15 && (
-                                  <div className="text-center text-gray-500 dark:text-gray-400 text-xs py-3 mt-3 border-t dark:border-gray-700">
-                                    ... and {mediaFiles[backup.id].length - 15} more media files
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="text-center py-4 text-gray-600 dark:text-gray-400">
-                                No media files found
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Followers Section */}
-                    {backup.data?.followers && Array.isArray(backup.data.followers) && backup.data.followers.length > 0 && backup.data.followers.some((f: any) => f && (f.username || f.user_id)) && (
-                      <div className="border dark:border-gray-700 rounded-lg">
-                        <button
-                          onClick={() => toggleSection(backup.id, 'followers')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                        >
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Followers ({backup.data.followers.length})
-                          </span>
-                          <span className="text-gray-500 dark:text-gray-400">
-                            {expandedSection === `${backup.id}-followers` ? '−' : '+'}
-                          </span>
-                        </button>
-                        {expandedSection === `${backup.id}-followers` && (
-                          <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
-                              {JSON.stringify(backup.data.followers.slice(0, 10), null, 2)}
-                              {backup.data.followers.length > 10 && `\n\n... and ${backup.data.followers.length - 10} more`}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Following Section */}
-                    {backup.data?.following && Array.isArray(backup.data.following) && backup.data.following.length > 0 && backup.data.following.some((f: any) => f && (f.username || f.user_id)) && (
-                      <div className="border dark:border-gray-700 rounded-lg">
-                        <button
-                          onClick={() => toggleSection(backup.id, 'following')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                        >
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Following ({backup.data.following.length})
-                          </span>
-                          <span className="text-gray-500 dark:text-gray-400">
-                            {expandedSection === `${backup.id}-following` ? '−' : '+'}
-                          </span>
-                        </button>
-                        {expandedSection === `${backup.id}-following` && (
-                          <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
-                              {JSON.stringify(backup.data.following.slice(0, 10), null, 2)}
-                              {backup.data.following.length > 10 && `\n\n... and ${backup.data.following.length - 10} more`}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Likes Section */}
-                    {backup.data?.likes && backup.data.likes.length > 0 && (
-                      <div className="border dark:border-gray-700 rounded-lg">
-                        <button
-                          onClick={() => toggleSection(backup.id, 'likes')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                        >
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Likes ({backup.data.likes.length})
-                          </span>
-                          <span className="text-gray-500 dark:text-gray-400">
-                            {expandedSection === `${backup.id}-likes` ? '−' : '+'}
-                          </span>
-                        </button>
-                        {expandedSection === `${backup.id}-likes` && (
-                          <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
-                              {JSON.stringify(backup.data.likes.slice(0, 10), null, 2)}
-                              {backup.data.likes.length > 10 && `\n\n... and ${backup.data.likes.length - 10} more`}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Direct Messages Section */}
-                    {backup.data?.direct_messages && backup.data.direct_messages.length > 0 && (
-                      <div className="border dark:border-gray-700 rounded-lg">
-                        <button
-                          onClick={() => toggleSection(backup.id, 'dms')}
-                          className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                        >
-                          <span className="font-semibold text-gray-900 dark:text-white">
-                            Direct Messages ({backup.data.direct_messages.length} conversations)
-                          </span>
-                          <span className="text-gray-500 dark:text-gray-400">
-                            {expandedSection === `${backup.id}-dms` ? '−' : '+'}
-                          </span>
-                        </button>
-                        {expandedSection === `${backup.id}-dms` && (
-                          <div className="px-4 pb-4 max-h-96 overflow-auto">
-                            <pre className="text-xs text-gray-800 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded whitespace-pre-wrap break-words overflow-x-hidden">
-                              {JSON.stringify(backup.data.direct_messages.slice(0, 5), null, 2)}
-                              {backup.data.direct_messages.length > 5 && `\n\n... and ${backup.data.direct_messages.length - 5} more`}
-                            </pre>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
                 )}
               </div>
             ))}
