@@ -39,12 +39,20 @@ export function MessageBubble({ message, isFromUser }: MessageBubbleProps) {
                       src={media.url}
                       alt="Message media"
                       className="rounded-lg max-w-full h-auto"
+                      onError={(e) => {
+                        // Hide broken images
+                        e.currentTarget.style.display = 'none'
+                      }}
                     />
                   ) : media.type === 'video' ? (
                     <video
                       src={media.url}
                       controls
                       className="rounded-lg max-w-full h-auto"
+                      onError={(e) => {
+                        // Hide broken videos
+                        e.currentTarget.style.display = 'none'
+                      }}
                     />
                   ) : null}
                 </div>

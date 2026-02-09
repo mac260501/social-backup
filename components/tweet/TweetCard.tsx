@@ -142,6 +142,10 @@ export function TweetCard({ tweet }: TweetCardProps) {
                       src={mediaItem.media_url || mediaItem.url}
                       alt="Tweet media"
                       className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+                      onError={(e) => {
+                        // Hide broken images
+                        e.currentTarget.style.display = 'none'
+                      }}
                     />
                   ) : mediaItem.type === 'video' || mediaItem.type === 'animated_gif' ? (
                     <div className="relative">
@@ -149,6 +153,10 @@ export function TweetCard({ tweet }: TweetCardProps) {
                         src={mediaItem.media_url || mediaItem.url}
                         controls
                         className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+                        onError={(e) => {
+                          // Hide broken videos
+                          e.currentTarget.style.display = 'none'
+                        }}
                       />
                     </div>
                   ) : null}
