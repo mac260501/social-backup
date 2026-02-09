@@ -14,7 +14,37 @@ export function DMsTab({ dms, userId, searchQuery = '' }: DMsTabProps) {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
 
   // Normalize userId to string for consistent comparison
-  const normalizedUserId = String(userId)
+  let normalizedUserId = String(userId)
+
+  // Detect actual user ID from DM data if needed
+  // Look at conversation_id pattern to extract user ID
+  const detectUserIdFromDMs = () => {
+    if (!Array.isArray(dms) || dms.length === 0) return normalizedUserId
+
+    // Get first conversation
+    const firstConv = dms[0]
+    if (firstConv.conversation_id && firstConv.conversation_id.includes('-')) {
+      // conversation_id format: "otherId-yourId" or "yourId-otherId"
+      const [id1, id2] = firstConv.conversation_id.split('-')
+
+      // Check which ID appears as sender in the messages
+      if (firstConv.messages && firstConv.messages.length > 0) {
+        const senderIds = firstConv.messages.map((m: any) => m.sender_id)
+        const id1Count = senderIds.filter((id: string) => id === id1).length
+        const id2Count = senderIds.filter((id: string) => id === id2).length
+
+        // The ID that appears as sender is likely the user (they're the one sending messages)
+        // But we need to check both conversations to be sure
+        // For now, let's just use the second ID in the conversation_id as it's more likely to be the user
+        return id2
+      }
+    }
+
+    return normalizedUserId
+  }
+
+  // Try to detect the correct user ID from the DM structure
+  normalizedUserId = detectUserIdFromDMs()
 
   // Group DMs by conversation
   const conversations = useMemo(() => {

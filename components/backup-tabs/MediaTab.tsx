@@ -10,10 +10,24 @@ interface MediaTabProps {
 export function MediaTab({ tweets, searchQuery = '' }: MediaTabProps) {
   const [selectedMedia, setSelectedMedia] = useState<any>(null)
 
+  // Extract media from tweet (supports multiple Twitter data formats)
+  const getMediaFromTweet = (tweet: any) => {
+    // Try different possible locations for media
+    return (
+      tweet.media ||
+      tweet.extended_entities?.media ||
+      tweet.entities?.media ||
+      tweet.tweet?.extended_entities?.media ||
+      tweet.tweet?.entities?.media ||
+      []
+    )
+  }
+
   // Filter tweets that have media
-  let tweetsWithMedia = tweets.filter(tweet =>
-    tweet.media && tweet.media.length > 0
-  )
+  let tweetsWithMedia = tweets.filter(tweet => {
+    const media = getMediaFromTweet(tweet)
+    return media && media.length > 0
+  })
 
   // Apply search filter
   if (searchQuery.trim()) {
@@ -25,12 +39,13 @@ export function MediaTab({ tweets, searchQuery = '' }: MediaTabProps) {
   }
 
   // Flatten all media items with their parent tweet
-  const allMedia = tweetsWithMedia.flatMap(tweet =>
-    tweet.media.map((media: any) => ({
-      ...media,
+  const allMedia = tweetsWithMedia.flatMap(tweet => {
+    const media = getMediaFromTweet(tweet)
+    return media.map((mediaItem: any) => ({
+      ...mediaItem,
       tweet
     }))
-  )
+  })
 
   return (
     <div className="p-6">

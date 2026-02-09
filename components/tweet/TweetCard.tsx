@@ -58,6 +58,20 @@ export function TweetCard({ tweet }: TweetCardProps) {
   const isRetweet = tweet.retweeted || text.startsWith('RT @')
   const isReply = tweet.in_reply_to_status_id || tweet.in_reply_to_user_id
 
+  // Extract media from tweet (supports multiple Twitter data formats)
+  const getMediaFromTweet = () => {
+    return (
+      tweet.media ||
+      tweet.extended_entities?.media ||
+      tweet.entities?.media ||
+      tweet.tweet?.extended_entities?.media ||
+      tweet.tweet?.entities?.media ||
+      []
+    )
+  }
+
+  const media = getMediaFromTweet()
+
   return (
     <div className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
       <div className="flex gap-3">
@@ -109,30 +123,30 @@ export function TweetCard({ tweet }: TweetCardProps) {
           </div>
 
           {/* Media Attachments */}
-          {tweet.media && tweet.media.length > 0 && (
+          {media && media.length > 0 && (
             <div className={`grid gap-2 mb-3 rounded-2xl overflow-hidden ${
-              tweet.media.length === 1 ? 'grid-cols-1' :
-              tweet.media.length === 2 ? 'grid-cols-2' :
-              tweet.media.length === 3 ? 'grid-cols-2' :
+              media.length === 1 ? 'grid-cols-1' :
+              media.length === 2 ? 'grid-cols-2' :
+              media.length === 3 ? 'grid-cols-2' :
               'grid-cols-2'
             }`}>
-              {tweet.media.slice(0, 4).map((media: any, index: number) => (
+              {media.slice(0, 4).map((mediaItem: any, index: number) => (
                 <div
                   key={index}
                   className={`relative ${
-                    tweet.media.length === 3 && index === 0 ? 'col-span-2' : ''
+                    media.length === 3 && index === 0 ? 'col-span-2' : ''
                   }`}
                 >
-                  {media.type === 'photo' ? (
+                  {mediaItem.type === 'photo' ? (
                     <img
-                      src={media.media_url || media.url}
+                      src={mediaItem.media_url || mediaItem.url}
                       alt="Tweet media"
                       className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
                     />
-                  ) : media.type === 'video' || media.type === 'animated_gif' ? (
+                  ) : mediaItem.type === 'video' || mediaItem.type === 'animated_gif' ? (
                     <div className="relative">
                       <video
-                        src={media.media_url || media.url}
+                        src={mediaItem.media_url || mediaItem.url}
                         controls
                         className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
                       />
