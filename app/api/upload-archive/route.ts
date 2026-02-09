@@ -591,7 +591,24 @@ export async function POST(request: Request) {
       media_files: uploadedCount,
     }
 
-    // Update the backup record with the new stats AND updated media URLs
+    // Upload the original ZIP file to storage for future downloads
+    console.log('Uploading original archive ZIP to storage...')
+    const archiveStoragePath = `${userUuid}/archives/${backupId}.zip`
+    const { error: archiveUploadError } = await supabase.storage
+      .from('twitter-media')
+      .upload(archiveStoragePath, buffer, {
+        contentType: 'application/zip',
+        upsert: false,
+      })
+
+    if (archiveUploadError && archiveUploadError.message !== 'The resource already exists') {
+      console.error('Failed to upload archive ZIP:', archiveUploadError)
+      // Don't fail the whole upload, just log the error
+    } else {
+      console.log('Successfully uploaded archive ZIP')
+    }
+
+    // Update the backup record with the new stats, updated media URLs, and archive path
     const { error: updateError } = await supabase
       .from('backups')
       .update({
@@ -602,7 +619,8 @@ export async function POST(request: Request) {
           following,
           likes,
           direct_messages: updatedDMs
-        }
+        },
+        archive_file_path: archiveUploadError ? null : archiveStoragePath
       })
       .eq('id', backupId)
 
@@ -610,7 +628,7 @@ export async function POST(request: Request) {
       console.error('Failed to update backup:', updateError)
       // Don't fail the whole upload, just log the error
     } else {
-      console.log('Successfully updated media URLs')
+      console.log('Successfully updated backup with media URLs and archive path')
     }
 
     // Clean up temp file
