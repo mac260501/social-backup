@@ -36,16 +36,6 @@ export default function BackupsPage() {
     }
   }
 
-  const downloadBackup = (backup: any) => {
-    const dataStr = JSON.stringify(backup.data, null, 2)
-    const dataBlob = new Blob([dataStr], { type: 'application/json' })
-    const url = URL.createObjectURL(dataBlob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `twitter_backup_${new Date(backup.uploaded_at || backup.created_at).toISOString().split('T')[0]}.json`
-    link.click()
-  }
-
   const deleteBackup = async (backupId: string, backupType: string) => {
     if (!confirm(`Are you sure you want to delete this ${backupType.replace('_', ' ')} backup? This action cannot be undone.`)) {
       return
@@ -168,12 +158,6 @@ export default function BackupsPage() {
                       className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 text-xs sm:text-sm"
                     >
                       View Details
-                    </button>
-                    <button
-                      onClick={() => downloadBackup(backup)}
-                      className="flex-1 sm:flex-none px-3 sm:px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-xs sm:text-sm"
-                    >
-                      Download
                     </button>
                     <button
                       onClick={() => deleteBackup(backup.id, 'backup')}
