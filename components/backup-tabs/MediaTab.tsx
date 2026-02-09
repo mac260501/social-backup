@@ -23,6 +23,7 @@ export function MediaTab({ backupId, searchQuery = '' }: MediaTabProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedMedia, setSelectedMedia] = useState<MediaFile | null>(null)
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'images' | 'videos'>('all')
 
   useEffect(() => {
     async function fetchMedia() {
@@ -51,16 +52,30 @@ export function MediaTab({ backupId, searchQuery = '' }: MediaTabProps) {
     fetchMedia()
   }, [backupId])
 
-  // Filter by search query (filename)
-  const filteredMedia = searchQuery.trim()
-    ? mediaFiles.filter(media =>
-        media.file_name.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : mediaFiles
-
   // Determine if file is image or video
   const isImage = (mimeType: string) => mimeType.startsWith('image/')
   const isVideo = (mimeType: string) => mimeType.startsWith('video/')
+
+  // Filter by search query and media type
+  let filteredMedia = mediaFiles
+
+  // Apply search filter
+  if (searchQuery.trim()) {
+    filteredMedia = filteredMedia.filter(media =>
+      media.file_name.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+  }
+
+  // Apply media type filter
+  if (mediaTypeFilter === 'images') {
+    filteredMedia = filteredMedia.filter(media => isImage(media.mime_type))
+  } else if (mediaTypeFilter === 'videos') {
+    filteredMedia = filteredMedia.filter(media => isVideo(media.mime_type))
+  }
+
+  // Count media by type
+  const imageCount = mediaFiles.filter(m => isImage(m.mime_type)).length
+  const videoCount = mediaFiles.filter(m => isVideo(m.mime_type)).length
 
   if (loading) {
     return (
@@ -90,6 +105,48 @@ export function MediaTab({ backupId, searchQuery = '' }: MediaTabProps) {
 
   return (
     <div className="p-6">
+      {/* Filter Bar */}
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        {/* Media Type Filter */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setMediaTypeFilter('all')}
+            className={`px-4 py-2 rounded-lg font-medium transition ${
+              mediaTypeFilter === 'all'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+            }`}
+          >
+            All ({mediaFiles.length})
+          </button>
+          <button
+            onClick={() => setMediaTypeFilter('images')}
+            className={`px-4 py-2 rounded-lg font-medium transition ${
+              mediaTypeFilter === 'images'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+            }`}
+          >
+            Photos ({imageCount})
+          </button>
+          <button
+            onClick={() => setMediaTypeFilter('videos')}
+            className={`px-4 py-2 rounded-lg font-medium transition ${
+              mediaTypeFilter === 'videos'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+            }`}
+          >
+            Videos ({videoCount})
+          </button>
+        </div>
+
+        {/* Results Count */}
+        <div className="text-sm text-gray-500 dark:text-gray-400">
+          Showing {filteredMedia.length} {filteredMedia.length === 1 ? 'file' : 'files'}
+        </div>
+      </div>
+
       {/* Media Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {filteredMedia.map((media) => (
