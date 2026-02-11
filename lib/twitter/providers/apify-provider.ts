@@ -229,12 +229,14 @@ export class ApifyProvider implements TwitterProvider {
 
       // Field names vary between actor versions — check both camelCase and snake_case
       const rawProfileImageUrl =
+        profile.profilePicture ||
         profile.profileImageUrl ||
         profile.profile_image_url_https ||
         profile.profile_image_url ||
         undefined
 
       const rawCoverImageUrl =
+        profile.coverPicture ||
         profile.profileBannerUrl ||
         profile.profile_banner_url ||
         undefined
