@@ -17,6 +17,7 @@
     "apify-client": "^2.21.0",
     "axios": "^1.13.2",
     "cheerio": "^1.1.2",
+    "lucide-react": "^0.563.0",
     "next": "16.1.1",
     "next-auth": "^4.24.13",
     "playwright": "^1.57.0",
