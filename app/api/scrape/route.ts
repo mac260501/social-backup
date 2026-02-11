@@ -92,10 +92,11 @@ async function processScrapedProfileMedia(
   ])
 
   // Update backup.data.profile with the storage paths so profile-media API can serve signed URLs
+  const uploadedProfileCount = [profileStoragePath, coverStoragePath].filter(Boolean).length
   if (profileStoragePath || coverStoragePath) {
     const { data: backup } = await supabase
       .from('backups')
-      .select('data')
+      .select('data, stats')
       .eq('id', backupId)
       .single()
 
@@ -105,12 +106,23 @@ async function processScrapedProfileMedia(
         ...(profileStoragePath ? { profileImageUrl: profileStoragePath } : {}),
         ...(coverStoragePath   ? { coverImageUrl:   coverStoragePath   } : {}),
       }
+
+      // Recalculate media_files: tweet media (stats minus pre-counted profile photos) + actual uploaded profile photos
+      const currentStats = backup.stats || {}
+      const previousTotal = currentStats.media_files || 0
+      const expectedProfileCount = (profileImageUrl ? 1 : 0) + (coverImageUrl ? 1 : 0)
+      const tweetOnlyCount = previousTotal - expectedProfileCount
+      const updatedMediaFiles = tweetOnlyCount + uploadedProfileCount
+
       await supabase
         .from('backups')
-        .update({ data: { ...backup.data, profile: updatedProfile } })
+        .update({
+          data: { ...backup.data, profile: updatedProfile },
+          stats: { ...currentStats, media_files: updatedMediaFiles },
+        })
         .eq('id', backupId)
 
-      console.log(`[Profile Media] Updated backup profile paths: profile=${profileStoragePath}, cover=${coverStoragePath}`)
+      console.log(`[Profile Media] Updated backup profile paths: profile=${profileStoragePath}, cover=${coverStoragePath}, media_files=${updatedMediaFiles}`)
     }
   }
 }
@@ -247,12 +259,16 @@ export async function POST(request: Request) {
 
     // Count media files from tweets
     const tweetsWithMedia = result.tweets.filter(t => t.media && t.media.length > 0)
-    const totalMediaCount = tweetsWithMedia.reduce((sum, t) => sum + (t.media?.length || 0), 0)
+    const tweetMediaCount = tweetsWithMedia.reduce((sum, t) => sum + (t.media?.length || 0), 0)
+    const profileMediaCount = (result.metadata.profileImageUrl ? 1 : 0) + (result.metadata.coverImageUrl ? 1 : 0)
+    const totalMediaCount = tweetMediaCount + profileMediaCount
 
     console.log(`[Scrape API] Scrape completed:`, {
       tweets: result.tweets.length,
       tweetsWithMedia: tweetsWithMedia.length,
       totalMedia: totalMediaCount,
+      tweetMedia: tweetMediaCount,
+      profileMedia: profileMediaCount,
       followers: result.followers.length,
       following: result.following.length,
       cost: result.cost.total_cost,
