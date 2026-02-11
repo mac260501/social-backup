@@ -60,6 +60,12 @@ export class ApifyProvider implements TwitterProvider {
           media_url: m.media_url_https || m.media_url || ''
         }))
 
+        // Use the highest resolution profile image (replace _normal with _400x400)
+        const rawProfileImg = item.user?.profile_image_url_https || item.user?.profile_image_url || item.author?.profileImageUrl
+        const profileImageUrl = rawProfileImg
+          ? rawProfileImg.replace('_normal.', '_400x400.')
+          : undefined
+
         return {
           id: item.id || item.id_str,
           text: item.full_text || item.text || '',
@@ -70,6 +76,7 @@ export class ApifyProvider implements TwitterProvider {
           author: {
             username: item.user?.screen_name || username,
             name: item.user?.name || '',
+            profileImageUrl,
           },
           media: media.length > 0 ? media : undefined
         }
@@ -205,6 +212,11 @@ export class ApifyProvider implements TwitterProvider {
     const followingCost = (following.length / 1000) * 0.4
     const totalCost = tweetCost + followerCost + followingCost
 
+    // Extract profile/cover image from the first tweet's user data
+    const firstTweetWithAuthor = tweets.find(t => t.author?.profileImageUrl)
+    const profileImageUrl = firstTweetWithAuthor?.author?.profileImageUrl
+    const displayName = firstTweetWithAuthor?.author?.name || username
+
     return {
       tweets,
       followers,
@@ -225,6 +237,8 @@ export class ApifyProvider implements TwitterProvider {
         is_partial: tweets.length < maxTweets,
         tweets_requested: maxTweets,
         tweets_received: tweets.length,
+        profileImageUrl,
+        displayName,
       },
     }
   }

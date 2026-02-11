@@ -16,6 +16,7 @@ export interface Tweet {
   author?: {
     username: string
     name: string
+    profileImageUrl?: string
   }
   media?: TweetMedia[]  // Media attachments (photos, videos, gifs)
 }
@@ -25,6 +26,7 @@ export interface Follower {
   username?: string
   name?: string
   userLink: string
+  profileImageUrl?: string
 }
 
 export interface Following {
@@ -32,6 +34,7 @@ export interface Following {
   username?: string
   name?: string
   userLink: string
+  profileImageUrl?: string
 }
 
 export interface Like {
@@ -62,5 +65,8 @@ export interface TwitterScrapeResult {
     is_partial: boolean // true if hit rate limits
     tweets_requested: number
     tweets_received: number
+    profileImageUrl?: string
+    coverImageUrl?: string
+    displayName?: string
   }
 }

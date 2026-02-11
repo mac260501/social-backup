@@ -197,6 +197,49 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         </div>
       </header>
 
+      {/* Profile Banner */}
+      {(backup.data?.profile?.coverImageUrl || backup.data?.profile?.profileImageUrl) && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+          <div className="relative rounded-xl overflow-hidden bg-gray-200 dark:bg-gray-700">
+            {/* Cover photo */}
+            {backup.data.profile.coverImageUrl ? (
+              <img
+                src={backup.data.profile.coverImageUrl}
+                alt="Cover photo"
+                className="w-full h-40 sm:h-56 object-cover"
+                onError={(e) => { e.currentTarget.style.display = 'none' }}
+              />
+            ) : (
+              <div className="w-full h-40 sm:h-56 bg-gradient-to-r from-blue-400 to-blue-600" />
+            )}
+            {/* Profile picture overlay */}
+            {backup.data.profile.profileImageUrl && (
+              <div className="absolute left-6 bottom-0 translate-y-1/2">
+                <img
+                  src={backup.data.profile.profileImageUrl}
+                  alt={backup.data.profile.displayName || backup.data.profile.username || 'Profile'}
+                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border-4 border-white dark:border-gray-900 object-cover shadow-lg"
+                  onError={(e) => { e.currentTarget.style.display = 'none' }}
+                />
+              </div>
+            )}
+          </div>
+          {/* Name under banner */}
+          <div className="mt-14 sm:mt-16 pb-2">
+            {backup.data.profile.displayName && (
+              <p className="text-lg font-bold text-gray-900 dark:text-white">
+                {backup.data.profile.displayName}
+              </p>
+            )}
+            {backup.data.profile.username && (
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                @{backup.data.profile.username}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'tweets' && (

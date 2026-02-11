@@ -404,7 +404,7 @@ export async function POST(request: Request) {
       zipfile.close()
 
       // Now extract the files we need
-      for (const fileName of ['data/tweets.js', 'data/tweet.js', 'data/follower.js', 'data/following.js', 'data/like.js', 'data/direct-messages.js']) {
+      for (const fileName of ['data/account.js', 'data/tweets.js', 'data/tweet.js', 'data/follower.js', 'data/following.js', 'data/like.js', 'data/direct-messages.js']) {
         const entry = entries.find(e => e.fileName === fileName)
         if (entry) {
           const zipfile2: any = await new Promise((resolve, reject) => {
@@ -445,7 +445,31 @@ export async function POST(request: Request) {
 
     const stats = { tweets: 0, followers: 0, following: 0, likes: 0, dms: 0 }
 
-    // Process extracted files (same as before)
+    // Helper: extract @username from a Twitter profile URL
+    // e.g. "https://twitter.com/someuser" -> "someuser"
+    const extractUsernameFromUrl = (url: string): string | undefined => {
+      if (!url) return undefined
+      const m = url.match(/^https?:\/\/(twitter\.com|x\.com)\/([A-Za-z0-9_]+)\/?$/)
+      return m ? m[2] : undefined
+    }
+
+    // Parse account.js for owner profile info (avatar, cover, display name)
+    let accountProfile: { username?: string; displayName?: string; avatarMediaUrl?: string; headerMediaUrl?: string } = {}
+    if (files['data/account.js']) {
+      const accountData = parseTwitterJSON(files['data/account.js'])
+      const account = accountData[0]?.account
+      if (account) {
+        accountProfile = {
+          username: account.username,
+          displayName: account.accountDisplayName,
+          avatarMediaUrl: account.avatarMediaUrl,
+          headerMediaUrl: account.headerMediaUrl,
+        }
+        console.log('Account profile:', accountProfile)
+      }
+    }
+
+    // Process extracted files
     let tweets = []
     const tweetsContent = files['data/tweets.js'] || files['data/tweet.js']
     if (tweetsContent) {
@@ -469,13 +493,14 @@ export async function POST(request: Request) {
       const followersData = parseTwitterJSON(files['data/follower.js'])
       followers = followersData.map((item: any) => {
         const accountId = item.follower?.accountId
-        const userLink = item.follower?.userLink || ''
+        const rawLink = item.follower?.userLink || ''
+        const extractedUsername = extractUsernameFromUrl(rawLink)
 
         return {
           user_id: accountId,
-          username: undefined,  // Not available in Twitter archives
-          name: undefined,      // Not available in Twitter archives
-          userLink: userLink || `https://twitter.com/intent/user?user_id=${accountId}`
+          username: extractedUsername,
+          name: extractedUsername,  // Use username as display name since full name not available
+          userLink: rawLink || `https://twitter.com/intent/user?user_id=${accountId}`
         }
       }).filter((f: any) => f.user_id)
       stats.followers = followers.length
@@ -486,13 +511,14 @@ export async function POST(request: Request) {
       const followingData = parseTwitterJSON(files['data/following.js'])
       following = followingData.map((item: any) => {
         const accountId = item.following?.accountId
-        const userLink = item.following?.userLink || ''
+        const rawLink = item.following?.userLink || ''
+        const extractedUsername = extractUsernameFromUrl(rawLink)
 
         return {
           user_id: accountId,
-          username: undefined,  // Not available in Twitter archives
-          name: undefined,      // Not available in Twitter archives
-          userLink: userLink || `https://twitter.com/intent/user?user_id=${accountId}`
+          username: extractedUsername,
+          name: extractedUsername,  // Use username as display name since full name not available
+          userLink: rawLink || `https://twitter.com/intent/user?user_id=${accountId}`
         }
       }).filter((f: any) => f.user_id)
       stats.following = following.length
@@ -585,6 +611,52 @@ export async function POST(request: Request) {
       userUuid
     )
 
+    // Resolve profile/cover image URLs from uploaded profile_media files
+    const profileMediaFiles = mediaFiles.filter(f => f.media_type === 'profile_media')
+    const getPublicMediaUrl = (storagePath: string): string => {
+      const { data } = supabase.storage.from('twitter-media').getPublicUrl(storagePath)
+      return data.publicUrl
+    }
+
+    // Match avatarMediaUrl / headerMediaUrl filenames against uploaded profile_media
+    const resolveProfileMediaUrl = (cdnUrl: string | undefined): string | undefined => {
+      if (!cdnUrl) return undefined
+      const cdnFilename = cdnUrl.split('/').pop()?.split('?')[0]
+      if (!cdnFilename) return undefined
+      // Try exact match first, then partial match
+      const matched = profileMediaFiles.find(f =>
+        f.file_name === cdnFilename || f.file_name.includes(cdnFilename.replace(/\.[^.]+$/, ''))
+      )
+      return matched ? getPublicMediaUrl(matched.file_path) : undefined
+    }
+
+    // Build profile object for this archive backup
+    const resolvedProfileImageUrl = resolveProfileMediaUrl(accountProfile.avatarMediaUrl)
+    const resolvedCoverImageUrl = resolveProfileMediaUrl(accountProfile.headerMediaUrl)
+
+    // Fallback: if we have exactly 1 or 2 profile media files, assign by file name heuristic
+    let profileImageUrl = resolvedProfileImageUrl
+    let coverImageUrl = resolvedCoverImageUrl
+    if (!profileImageUrl && profileMediaFiles.length > 0) {
+      const avatarFile = profileMediaFiles.find(f =>
+        f.file_name.includes('profile_image') || f.file_name.includes('avatar') || f.file_name.includes('400x400')
+      ) || profileMediaFiles[0]
+      profileImageUrl = getPublicMediaUrl(avatarFile.file_path)
+    }
+    if (!coverImageUrl && profileMediaFiles.length > 1) {
+      const headerFile = profileMediaFiles.find(f =>
+        f.file_name.includes('header') || f.file_name.includes('banner') || f.file_name.includes('cover')
+      ) || profileMediaFiles.find(f => getPublicMediaUrl(f.file_path) !== profileImageUrl)
+      if (headerFile) coverImageUrl = getPublicMediaUrl(headerFile.file_path)
+    }
+
+    const archiveProfile = {
+      username: accountProfile.username || username,
+      displayName: accountProfile.displayName || username,
+      profileImageUrl,
+      coverImageUrl,
+    }
+
     // Update stats to include media count
     const updatedStats = {
       ...stats,
@@ -618,7 +690,8 @@ export async function POST(request: Request) {
           followers,
           following,
           likes,
-          direct_messages: updatedDMs
+          direct_messages: updatedDMs,
+          profile: archiveProfile,
         },
         archive_file_path: archiveUploadError ? null : archiveStoragePath
       })

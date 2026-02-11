@@ -178,6 +178,12 @@ export async function POST(request: Request) {
         following: result.following,
         likes: [], // Scraping doesn't get likes
         direct_messages: [], // Scraping doesn't get DMs
+        profile: {
+          username: result.metadata.username,
+          displayName: result.metadata.displayName,
+          profileImageUrl: result.metadata.profileImageUrl,
+          coverImageUrl: result.metadata.coverImageUrl,
+        },
       },
       stats: {
         tweets: result.tweets.length,
