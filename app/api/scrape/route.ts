@@ -22,6 +22,100 @@ function createUuidFromString(str: string): string {
 }
 
 /**
+ * Download and store profile + cover photos for a scraped backup.
+ * Runs after backup row is inserted so we can update data.profile with storage paths.
+ */
+async function processScrapedProfileMedia(
+  userId: string,
+  backupId: string,
+  profileImageUrl: string | undefined,
+  coverImageUrl: string | undefined,
+) {
+  if (!profileImageUrl && !coverImageUrl) return
+
+  console.log(`[Profile Media] Processing profile photos for backup ${backupId}`)
+
+  const uploadImage = async (sourceUrl: string, filename: string): Promise<string | null> => {
+    try {
+      const response = await fetch(sourceUrl)
+      if (!response.ok) {
+        console.error(`[Profile Media] Failed to download ${sourceUrl}: ${response.statusText}`)
+        return null
+      }
+
+      const arrayBuffer = await response.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+      const contentType = response.headers.get('content-type') || 'image/jpeg'
+
+      const storagePath = `${userId}/profile_media/${filename}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('twitter-media')
+        .upload(storagePath, buffer, { contentType, upsert: true })
+
+      if (uploadError && uploadError.message !== 'The resource already exists') {
+        console.error(`[Profile Media] Upload error for ${filename}:`, uploadError)
+        return null
+      }
+
+      // Upsert media_files record
+      const { data: existing } = await supabase
+        .from('media_files')
+        .select('id')
+        .eq('backup_id', backupId)
+        .eq('file_path', storagePath)
+        .maybeSingle()
+
+      if (!existing) {
+        await supabase.from('media_files').insert({
+          user_id: userId,
+          backup_id: backupId,
+          file_path: storagePath,
+          file_name: filename,
+          file_size: buffer.length,
+          mime_type: contentType,
+          media_type: 'profile_media',
+        })
+      }
+
+      console.log(`[Profile Media] Uploaded ${filename}`)
+      return storagePath
+    } catch (err) {
+      console.error(`[Profile Media] Error processing ${filename}:`, err)
+      return null
+    }
+  }
+
+  const [profileStoragePath, coverStoragePath] = await Promise.all([
+    profileImageUrl ? uploadImage(profileImageUrl, 'profile_photo_400x400.jpg') : Promise.resolve(null),
+    coverImageUrl   ? uploadImage(coverImageUrl,   'cover_photo.jpg')           : Promise.resolve(null),
+  ])
+
+  // Update backup.data.profile with the storage paths so profile-media API can serve signed URLs
+  if (profileStoragePath || coverStoragePath) {
+    const { data: backup } = await supabase
+      .from('backups')
+      .select('data')
+      .eq('id', backupId)
+      .single()
+
+    if (backup) {
+      const updatedProfile = {
+        ...(backup.data?.profile || {}),
+        ...(profileStoragePath ? { profileImageUrl: profileStoragePath } : {}),
+        ...(coverStoragePath   ? { coverImageUrl:   coverStoragePath   } : {}),
+      }
+      await supabase
+        .from('backups')
+        .update({ data: { ...backup.data, profile: updatedProfile } })
+        .eq('id', backupId)
+
+      console.log(`[Profile Media] Updated backup profile paths: profile=${profileStoragePath}, cover=${coverStoragePath}`)
+    }
+  }
+}
+
+/**
  * Download and store media files from scraped tweets
  * Runs in background after scrape completes
  */
@@ -209,6 +303,16 @@ export async function POST(request: Request) {
     }
 
     console.log('[Scrape API] Backup saved successfully:', insertedBackup.id)
+
+    // Download and store profile + cover photos (in background)
+    processScrapedProfileMedia(
+      userUuid,
+      insertedBackup.id,
+      result.metadata.profileImageUrl,
+      result.metadata.coverImageUrl,
+    ).catch(err => {
+      console.error('[Scrape API] Error processing profile media:', err)
+    })
 
     // Download and store media files from scraped tweets (in background)
     if (totalMediaCount > 0) {
