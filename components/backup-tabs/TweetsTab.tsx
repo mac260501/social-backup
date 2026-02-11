@@ -6,13 +6,14 @@ import { TweetCard } from '@/components/tweet/TweetCard'
 interface TweetsTabProps {
   tweets: any[]
   searchQuery?: string
+  ownerProfileImageUrl?: string | null
 }
 
 type FilterType = 'all' | 'original' | 'retweets' | 'replies'
 type SortType = 'newest' | 'oldest' | 'most-liked'
 type DateRange = 'all' | '30-days' | '6-months' | '1-year'
 
-export function TweetsTab({ tweets, searchQuery = '' }: TweetsTabProps) {
+export function TweetsTab({ tweets, searchQuery = '', ownerProfileImageUrl }: TweetsTabProps) {
   const [filter, setFilter] = useState<FilterType>('all')
   const [sort, setSort] = useState<SortType>('newest')
   const [dateRange, setDateRange] = useState<DateRange>('all')
@@ -162,7 +163,7 @@ export function TweetsTab({ tweets, searchQuery = '' }: TweetsTabProps) {
         {visibleTweets.length > 0 ? (
           <>
             {visibleTweets.map((tweet, index) => (
-              <TweetCard key={tweet.id || index} tweet={tweet} />
+              <TweetCard key={tweet.id || index} tweet={tweet} ownerProfileImageUrl={ownerProfileImageUrl} />
             ))}
 
             {hasMore && (

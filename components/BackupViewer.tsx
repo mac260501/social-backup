@@ -264,7 +264,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         {activeTab === 'tweets' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
             {backup.data?.tweets && backup.data.tweets.length > 0 ? (
-              <TweetsTab tweets={backup.data.tweets} searchQuery={searchQuery} />
+              <TweetsTab tweets={backup.data.tweets} searchQuery={searchQuery} ownerProfileImageUrl={profileImageUrl} />
             ) : (
               <div className="p-12 text-center text-gray-500 dark:text-gray-400">
                 No tweets found

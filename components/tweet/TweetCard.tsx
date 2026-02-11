@@ -4,9 +4,10 @@ import { TweetText } from './TweetText'
 
 interface TweetCardProps {
   tweet: any
+  ownerProfileImageUrl?: string | null
 }
 
-export function TweetCard({ tweet }: TweetCardProps) {
+export function TweetCard({ tweet, ownerProfileImageUrl }: TweetCardProps) {
   // Parse both ISO format and Twitter archive format: "Thu Mar 10 12:00:00 +0000 2022"
   const parseDate = (dateString: string): Date => {
     if (!dateString) return new Date(NaN)
@@ -69,7 +70,7 @@ export function TweetCard({ tweet }: TweetCardProps) {
 
   const username = tweet.author?.username || tweet.user?.screen_name || 'unknown'
   const displayName = tweet.author?.name || tweet.user?.name || username
-  const profileImageUrl = tweet.author?.profileImageUrl || tweet.user?.profile_image_url_https || tweet.user?.profile_image_url || null
+  const profileImageUrl = tweet.author?.profileImageUrl || tweet.user?.profile_image_url_https || tweet.user?.profile_image_url || ownerProfileImageUrl || null
   const text = tweet.full_text || tweet.text || ''
   const isRetweet = tweet.retweeted || text.startsWith('RT @')
   const isReply = tweet.in_reply_to_status_id || tweet.in_reply_to_user_id
