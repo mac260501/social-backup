@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { SearchBar } from '@/components/SearchBar'
@@ -22,6 +22,29 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const [activeTab, setActiveTab] = useState<Tab>('tweets')
   const [searchQuery, setSearchQuery] = useState('')
   const [isDownloading, setIsDownloading] = useState(false)
+  const [profileImageUrl, setProfileImageUrl] = useState<string | null>(
+    backup.data?.profile?.profileImageUrl || null
+  )
+  const [coverImageUrl, setCoverImageUrl] = useState<string | null>(
+    backup.data?.profile?.coverImageUrl || null
+  )
+
+  useEffect(() => {
+    // Fetch signed URLs for profile/cover photos (the bucket is private, public URLs don't work)
+    if (backup.data?.profile?.profileImageUrl || backup.data?.profile?.coverImageUrl) {
+      fetch(`/api/profile-media?backupId=${backup.id}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            if (data.profileImageUrl) setProfileImageUrl(data.profileImageUrl)
+            if (data.coverImageUrl) setCoverImageUrl(data.coverImageUrl)
+          }
+        })
+        .catch(() => {
+          // Keep the stored URLs as fallback
+        })
+    }
+  }, [backup.id, backup.data?.profile?.profileImageUrl, backup.data?.profile?.coverImageUrl])
 
   const handleDownloadArchive = async () => {
     try {
@@ -202,9 +225,9 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
           <div className="relative rounded-xl overflow-hidden bg-gray-200 dark:bg-gray-700">
             {/* Cover photo */}
-            {backup.data.profile.coverImageUrl ? (
+            {coverImageUrl ? (
               <img
-                src={backup.data.profile.coverImageUrl}
+                src={coverImageUrl}
                 alt="Cover photo"
                 className="w-full h-40 sm:h-56 object-cover"
                 onError={(e) => { e.currentTarget.style.display = 'none' }}
@@ -213,10 +236,10 @@ export function BackupViewer({ backup }: BackupViewerProps) {
               <div className="w-full h-40 sm:h-56 bg-gradient-to-r from-blue-400 to-blue-600" />
             )}
             {/* Profile picture overlay */}
-            {backup.data.profile.profileImageUrl && (
+            {profileImageUrl && (
               <div className="absolute left-6 bottom-0 translate-y-1/2">
                 <img
-                  src={backup.data.profile.profileImageUrl}
+                  src={profileImageUrl}
                   alt={backup.data.profile.displayName || backup.data.profile.username || 'Profile'}
                   className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border-4 border-white dark:border-gray-900 object-cover shadow-lg"
                   onError={(e) => { e.currentTarget.style.display = 'none' }}
