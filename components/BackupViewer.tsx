@@ -22,12 +22,8 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const [activeTab, setActiveTab] = useState<Tab>('tweets')
   const [searchQuery, setSearchQuery] = useState('')
   const [isDownloading, setIsDownloading] = useState(false)
-  const [profileImageUrl, setProfileImageUrl] = useState<string | null>(
-    backup.data?.profile?.profileImageUrl || null
-  )
-  const [coverImageUrl, setCoverImageUrl] = useState<string | null>(
-    backup.data?.profile?.coverImageUrl || null
-  )
+  const [profileImageUrl, setProfileImageUrl] = useState<string | null>(null)
+  const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null)
 
   useEffect(() => {
     // Fetch signed URLs for profile/cover photos (the bucket is private, public URLs don't work)
@@ -223,26 +219,26 @@ export function BackupViewer({ backup }: BackupViewerProps) {
       {/* Profile Banner */}
       {(backup.data?.profile?.coverImageUrl || backup.data?.profile?.profileImageUrl) && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
-          <div className="relative rounded-xl overflow-hidden bg-gray-200 dark:bg-gray-700">
+          <div className="relative">
             {/* Cover photo */}
-            {coverImageUrl ? (
-              <img
-                src={coverImageUrl}
-                alt="Cover photo"
-                className="w-full h-40 sm:h-56 object-cover"
-                onError={(e) => { e.currentTarget.style.display = 'none' }}
-              />
-            ) : (
-              <div className="w-full h-40 sm:h-56 bg-gradient-to-r from-blue-400 to-blue-600" />
-            )}
-            {/* Profile picture overlay */}
+            <div className="rounded-xl overflow-hidden bg-gray-200 dark:bg-gray-700">
+              {coverImageUrl ? (
+                <img
+                  src={coverImageUrl}
+                  alt="Cover photo"
+                  className="w-full h-40 sm:h-56 object-cover"
+                />
+              ) : (
+                <div className="w-full h-40 sm:h-56 bg-gradient-to-r from-blue-400 to-blue-600" />
+              )}
+            </div>
+            {/* Profile picture overlay — outside overflow-hidden so it isn't clipped */}
             {profileImageUrl && (
               <div className="absolute left-6 bottom-0 translate-y-1/2">
                 <img
                   src={profileImageUrl}
                   alt={backup.data.profile.displayName || backup.data.profile.username || 'Profile'}
                   className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border-4 border-white dark:border-gray-900 object-cover shadow-lg"
-                  onError={(e) => { e.currentTarget.style.display = 'none' }}
                 />
               </div>
             )}
