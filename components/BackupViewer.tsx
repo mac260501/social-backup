@@ -26,20 +26,29 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    // Fetch signed URLs for profile/cover photos (the bucket is private, public URLs don't work)
-    if (backup.data?.profile?.profileImageUrl || backup.data?.profile?.coverImageUrl) {
-      fetch(`/api/profile-media?backupId=${backup.id}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            if (data.profileImageUrl) setProfileImageUrl(data.profileImageUrl)
-            if (data.coverImageUrl) setCoverImageUrl(data.coverImageUrl)
-          }
-        })
-        .catch(() => {
-          // Keep the stored URLs as fallback
-        })
-    }
+    const storedProfile = backup.data?.profile?.profileImageUrl
+    const storedCover   = backup.data?.profile?.coverImageUrl
+
+    if (!storedProfile && !storedCover) return
+
+    // For scraped backups the stored value is a Twitter CDN URL (starts with https://).
+    // Use it immediately so the photo is visible while the background storage job runs.
+    if (storedProfile?.startsWith('http')) setProfileImageUrl(storedProfile)
+    if (storedCover?.startsWith('http'))   setCoverImageUrl(storedCover)
+
+    // Then try to upgrade to a signed storage URL (works for both archive and scraped backups
+    // once the background upload job has finished).
+    fetch(`/api/profile-media?backupId=${backup.id}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          if (data.profileImageUrl) setProfileImageUrl(data.profileImageUrl)
+          if (data.coverImageUrl)   setCoverImageUrl(data.coverImageUrl)
+        }
+      })
+      .catch(() => {
+        // CDN fallback already set above
+      })
   }, [backup.id, backup.data?.profile?.profileImageUrl, backup.data?.profile?.coverImageUrl])
 
   const handleDownloadArchive = async () => {
