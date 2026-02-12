@@ -95,25 +95,23 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
     <div className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
       <div className="flex gap-3">
         {/* Avatar */}
-        <div className="flex-shrink-0">
-          {profileImageUrl ? (
-            <img
-              src={profileImageUrl}
-              alt={displayName}
-              className="w-12 h-12 rounded-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none'
-                const fallback = e.currentTarget.nextElementSibling as HTMLElement
-                if (fallback) fallback.style.display = 'flex'
-              }}
-            />
-          ) : null}
+        <div className="flex-shrink-0 relative w-12 h-12">
           <div
             className={`w-12 h-12 rounded-full ${getAvatarColor(displayName)} flex items-center justify-center text-white font-semibold`}
-            style={{ display: profileImageUrl ? 'none' : 'flex' }}
           >
             {getInitials(displayName)}
           </div>
+          {profileImageUrl && (
+            <img
+              key={profileImageUrl}
+              src={profileImageUrl}
+              alt={displayName}
+              className="absolute inset-0 w-12 h-12 rounded-full object-cover"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none'
+              }}
+            />
+          )}
         </div>
 
         {/* Tweet Content */}
