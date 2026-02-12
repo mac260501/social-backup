@@ -484,6 +484,11 @@ export async function POST(request: Request) {
         extended_entities: item.tweet?.extended_entities,
         entities: item.tweet?.entities,
         media: item.tweet?.extended_entities?.media || item.tweet?.entities?.media,
+        // Inject owner profile info so tweets display the correct username/avatar
+        author: {
+          username: accountProfile.username || username,
+          name: accountProfile.displayName || username,
+        },
       })).filter((t: any) => t.id)
       stats.tweets = tweets.length
     }
