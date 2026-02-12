@@ -488,6 +488,7 @@ export async function POST(request: Request) {
         author: {
           username: accountProfile.username || username,
           name: accountProfile.displayName || username,
+          profileImageUrl: accountProfile.avatarMediaUrl,
         },
       })).filter((t: any) => t.id)
       stats.tweets = tweets.length
@@ -658,8 +659,8 @@ export async function POST(request: Request) {
     const archiveProfile = {
       username: accountProfile.username || username,
       displayName: accountProfile.displayName || username,
-      profileImageUrl,
-      coverImageUrl,
+      profileImageUrl: profileImageUrl || accountProfile.avatarMediaUrl,
+      coverImageUrl: coverImageUrl || accountProfile.headerMediaUrl,
     }
 
     // Update stats to include media count
