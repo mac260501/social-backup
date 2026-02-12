@@ -60,16 +60,23 @@ export class ApifyProvider implements TwitterProvider {
           media_url: m.media_url_https || m.media_url || ''
         }))
 
+        // Use the highest resolution profile image (replace _normal with _400x400)
+        const rawProfileImg = item.user?.profile_image_url_https || item.user?.profile_image_url || item.author?.profileImageUrl
+        const profileImageUrl = rawProfileImg
+          ? rawProfileImg.replace('_normal.', '_400x400.')
+          : undefined
+
         return {
           id: item.id || item.id_str,
           text: item.full_text || item.text || '',
-          created_at: item.created_at,
+          created_at: item.created_at || item.createdAt,
           retweet_count: item.retweet_count || 0,
           favorite_count: item.favorite_count || 0,
           reply_count: item.reply_count || 0,
           author: {
             username: item.user?.screen_name || username,
             name: item.user?.name || '',
+            profileImageUrl,
           },
           media: media.length > 0 ? media : undefined
         }
@@ -187,15 +194,85 @@ export class ApifyProvider implements TwitterProvider {
     }
   }
 
+  async scrapeProfile(username: string): Promise<{ profileImageUrl?: string; coverImageUrl?: string; displayName?: string }> {
+    if (!this.isConfigured()) {
+      throw new Error('Apify API key not configured')
+    }
+
+    console.log(`[Apify] Scraping profile for @${username}`)
+
+    try {
+      // The actor requires a minimum of 5 handles due to their pricing model
+      const run = await this.client.actor(this.userActorId).call({
+        twitterHandles: [username, username, username, username, username],
+        getFollowers: false,
+        getFollowing: false,
+        getRetweeters: false,
+        includeUnavailableUsers: false,
+        maxItems: 5,
+      })
+
+      if (run.status === 'FAILED') {
+        throw new Error('Apify run failed while fetching profile data.')
+      }
+
+      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
+
+      if (!items || items.length === 0) {
+        console.warn('[Apify] No profile data returned')
+        return {}
+      }
+
+      // The first item is the user's own profile
+      const profile = items[0] as any
+      console.log('[Apify] Raw profile fields:', Object.keys(profile))
+
+      // Field names vary between actor versions — check both camelCase and snake_case
+      const rawProfileImageUrl =
+        profile.profilePicture ||
+        profile.profileImageUrl ||
+        profile.profile_image_url_https ||
+        profile.profile_image_url ||
+        undefined
+
+      const rawCoverImageUrl =
+        profile.coverPicture ||
+        profile.profileBannerUrl ||
+        profile.profile_banner_url ||
+        undefined
+
+      const displayName = profile.name || profile.displayName || username
+
+      // Upscale profile image from _normal (48px) to _400x400
+      const profileImageUrl = rawProfileImageUrl
+        ? rawProfileImageUrl.replace('_normal.', '_400x400.')
+        : undefined
+
+      // Append /1500x500 to banner URL for full resolution if not already present
+      const coverImageUrl = rawCoverImageUrl
+        ? rawCoverImageUrl.endsWith('/1500x500') ? rawCoverImageUrl : `${rawCoverImageUrl}/1500x500`
+        : undefined
+
+      console.log(`[Apify] Profile scraped for @${username}: profileImage=${!!profileImageUrl}, cover=${!!coverImageUrl}`)
+
+      return { profileImageUrl, coverImageUrl, displayName }
+    } catch (error) {
+      // Non-fatal: log and return empty so the rest of the scrape can continue
+      console.error('[Apify] Error scraping profile (non-fatal):', error)
+      return {}
+    }
+  }
+
   async scrapeAll(username: string, maxTweets: number = 3200): Promise<TwitterScrapeResult> {
     const startTime = Date.now()
 
     console.log(`[Apify] Starting full scrape for @${username}`)
 
-    // Scrape all data: tweets, followers, and following
+    // Scrape all data: tweets, followers, following, and dedicated profile
     const tweets = await this.scrapeTweets(username, maxTweets)
     const followers = await this.scrapeFollowers(username)
     const following = await this.scrapeFollowing(username)
+    const profileData = await this.scrapeProfile(username)
 
     // Calculate cost based on Apify pricing
     // Tweet scraper: ~$0.40 per 1,000 tweets
@@ -204,6 +281,12 @@ export class ApifyProvider implements TwitterProvider {
     const followerCost = (followers.length / 1000) * 0.4
     const followingCost = (following.length / 1000) * 0.4
     const totalCost = tweetCost + followerCost + followingCost
+
+    // Prefer dedicated profile data; fall back to author data from tweets
+    const firstTweetWithAuthor = tweets.find(t => t.author?.profileImageUrl)
+    const profileImageUrl = profileData.profileImageUrl || firstTweetWithAuthor?.author?.profileImageUrl
+    const coverImageUrl = profileData.coverImageUrl
+    const displayName = profileData.displayName || firstTweetWithAuthor?.author?.name || username
 
     return {
       tweets,
@@ -225,6 +308,9 @@ export class ApifyProvider implements TwitterProvider {
         is_partial: tweets.length < maxTweets,
         tweets_requested: maxTweets,
         tweets_received: tweets.length,
+        profileImageUrl,
+        coverImageUrl,
+        displayName,
       },
     }
   }

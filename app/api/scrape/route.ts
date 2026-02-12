@@ -22,6 +22,112 @@ function createUuidFromString(str: string): string {
 }
 
 /**
+ * Download and store profile + cover photos for a scraped backup.
+ * Runs after backup row is inserted so we can update data.profile with storage paths.
+ */
+async function processScrapedProfileMedia(
+  userId: string,
+  backupId: string,
+  profileImageUrl: string | undefined,
+  coverImageUrl: string | undefined,
+) {
+  if (!profileImageUrl && !coverImageUrl) return
+
+  console.log(`[Profile Media] Processing profile photos for backup ${backupId}`)
+
+  const uploadImage = async (sourceUrl: string, filename: string): Promise<string | null> => {
+    try {
+      const response = await fetch(sourceUrl)
+      if (!response.ok) {
+        console.error(`[Profile Media] Failed to download ${sourceUrl}: ${response.statusText}`)
+        return null
+      }
+
+      const arrayBuffer = await response.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+      const contentType = response.headers.get('content-type') || 'image/jpeg'
+
+      const storagePath = `${userId}/profile_media/${filename}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('twitter-media')
+        .upload(storagePath, buffer, { contentType, upsert: true })
+
+      if (uploadError && uploadError.message !== 'The resource already exists') {
+        console.error(`[Profile Media] Upload error for ${filename}:`, uploadError)
+        return null
+      }
+
+      // Upsert media_files record
+      const { data: existing } = await supabase
+        .from('media_files')
+        .select('id')
+        .eq('backup_id', backupId)
+        .eq('file_path', storagePath)
+        .maybeSingle()
+
+      if (!existing) {
+        await supabase.from('media_files').insert({
+          user_id: userId,
+          backup_id: backupId,
+          file_path: storagePath,
+          file_name: filename,
+          file_size: buffer.length,
+          mime_type: contentType,
+          media_type: 'profile_media',
+        })
+      }
+
+      console.log(`[Profile Media] Uploaded ${filename}`)
+      return storagePath
+    } catch (err) {
+      console.error(`[Profile Media] Error processing ${filename}:`, err)
+      return null
+    }
+  }
+
+  const [profileStoragePath, coverStoragePath] = await Promise.all([
+    profileImageUrl ? uploadImage(profileImageUrl, 'profile_photo_400x400.jpg') : Promise.resolve(null),
+    coverImageUrl   ? uploadImage(coverImageUrl,   'cover_photo.jpg')           : Promise.resolve(null),
+  ])
+
+  // Update backup.data.profile with the storage paths so profile-media API can serve signed URLs
+  const uploadedProfileCount = [profileStoragePath, coverStoragePath].filter(Boolean).length
+  if (profileStoragePath || coverStoragePath) {
+    const { data: backup } = await supabase
+      .from('backups')
+      .select('data, stats')
+      .eq('id', backupId)
+      .single()
+
+    if (backup) {
+      const updatedProfile = {
+        ...(backup.data?.profile || {}),
+        ...(profileStoragePath ? { profileImageUrl: profileStoragePath } : {}),
+        ...(coverStoragePath   ? { coverImageUrl:   coverStoragePath   } : {}),
+      }
+
+      // Recalculate media_files: tweet media (stats minus pre-counted profile photos) + actual uploaded profile photos
+      const currentStats = backup.stats || {}
+      const previousTotal = currentStats.media_files || 0
+      const expectedProfileCount = (profileImageUrl ? 1 : 0) + (coverImageUrl ? 1 : 0)
+      const tweetOnlyCount = previousTotal - expectedProfileCount
+      const updatedMediaFiles = tweetOnlyCount + uploadedProfileCount
+
+      await supabase
+        .from('backups')
+        .update({
+          data: { ...backup.data, profile: updatedProfile },
+          stats: { ...currentStats, media_files: updatedMediaFiles },
+        })
+        .eq('id', backupId)
+
+      console.log(`[Profile Media] Updated backup profile paths: profile=${profileStoragePath}, cover=${coverStoragePath}, media_files=${updatedMediaFiles}`)
+    }
+  }
+}
+
+/**
  * Download and store media files from scraped tweets
  * Runs in background after scrape completes
  */
@@ -153,12 +259,16 @@ export async function POST(request: Request) {
 
     // Count media files from tweets
     const tweetsWithMedia = result.tweets.filter(t => t.media && t.media.length > 0)
-    const totalMediaCount = tweetsWithMedia.reduce((sum, t) => sum + (t.media?.length || 0), 0)
+    const tweetMediaCount = tweetsWithMedia.reduce((sum, t) => sum + (t.media?.length || 0), 0)
+    const profileMediaCount = (result.metadata.profileImageUrl ? 1 : 0) + (result.metadata.coverImageUrl ? 1 : 0)
+    const totalMediaCount = tweetMediaCount + profileMediaCount
 
     console.log(`[Scrape API] Scrape completed:`, {
       tweets: result.tweets.length,
       tweetsWithMedia: tweetsWithMedia.length,
       totalMedia: totalMediaCount,
+      tweetMedia: tweetMediaCount,
+      profileMedia: profileMediaCount,
       followers: result.followers.length,
       following: result.following.length,
       cost: result.cost.total_cost,
@@ -178,6 +288,12 @@ export async function POST(request: Request) {
         following: result.following,
         likes: [], // Scraping doesn't get likes
         direct_messages: [], // Scraping doesn't get DMs
+        profile: {
+          username: result.metadata.username,
+          displayName: result.metadata.displayName,
+          profileImageUrl: result.metadata.profileImageUrl,
+          coverImageUrl: result.metadata.coverImageUrl,
+        },
       },
       stats: {
         tweets: result.tweets.length,
@@ -203,6 +319,16 @@ export async function POST(request: Request) {
     }
 
     console.log('[Scrape API] Backup saved successfully:', insertedBackup.id)
+
+    // Download and store profile + cover photos (in background)
+    processScrapedProfileMedia(
+      userUuid,
+      insertedBackup.id,
+      result.metadata.profileImageUrl,
+      result.metadata.coverImageUrl,
+    ).catch(err => {
+      console.error('[Scrape API] Error processing profile media:', err)
+    })
 
     // Download and store media files from scraped tweets (in background)
     if (totalMediaCount > 0) {

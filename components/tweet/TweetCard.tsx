@@ -4,11 +4,26 @@ import { TweetText } from './TweetText'
 
 interface TweetCardProps {
   tweet: any
+  ownerProfileImageUrl?: string | null
 }
 
-export function TweetCard({ tweet }: TweetCardProps) {
+export function TweetCard({ tweet, ownerProfileImageUrl }: TweetCardProps) {
+  // Parse both ISO format and Twitter archive format: "Thu Mar 10 12:00:00 +0000 2022"
+  const parseDate = (dateString: string): Date => {
+    if (!dateString) return new Date(NaN)
+    const isoDate = new Date(dateString)
+    if (!isNaN(isoDate.getTime())) return isoDate
+    const m = dateString.match(/^(\w{3}) (\w{3}) (\d{2}) (\d{2}:\d{2}:\d{2}) \+0000 (\d{4})$/)
+    if (m) {
+      const [, dow, month, day, time, year] = m
+      return new Date(`${dow}, ${day} ${month} ${year} ${time} +0000`)
+    }
+    return new Date(NaN)
+  }
+
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
+    const date = parseDate(dateString)
+    if (isNaN(date.getTime())) return ''
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -17,7 +32,8 @@ export function TweetCard({ tweet }: TweetCardProps) {
   }
 
   const formatTime = (dateString: string) => {
-    const date = new Date(dateString)
+    const date = parseDate(dateString)
+    if (isNaN(date.getTime())) return ''
     return date.toLocaleTimeString('en-US', {
       hour: 'numeric',
       minute: '2-digit',
@@ -54,6 +70,7 @@ export function TweetCard({ tweet }: TweetCardProps) {
 
   const username = tweet.author?.username || tweet.user?.screen_name || 'unknown'
   const displayName = tweet.author?.name || tweet.user?.name || username
+  const profileImageUrl = tweet.author?.profileImageUrl || tweet.user?.profile_image_url_https || tweet.user?.profile_image_url || ownerProfileImageUrl || null
   const text = tweet.full_text || tweet.text || ''
   const isRetweet = tweet.retweeted || text.startsWith('RT @')
   const isReply = tweet.in_reply_to_status_id || tweet.in_reply_to_user_id
@@ -77,7 +94,22 @@ export function TweetCard({ tweet }: TweetCardProps) {
       <div className="flex gap-3">
         {/* Avatar */}
         <div className="flex-shrink-0">
-          <div className={`w-12 h-12 rounded-full ${getAvatarColor(displayName)} flex items-center justify-center text-white font-semibold`}>
+          {profileImageUrl ? (
+            <img
+              src={profileImageUrl}
+              alt={displayName}
+              className="w-12 h-12 rounded-full object-cover"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none'
+                const fallback = e.currentTarget.nextElementSibling as HTMLElement
+                if (fallback) fallback.style.display = 'flex'
+              }}
+            />
+          ) : null}
+          <div
+            className={`w-12 h-12 rounded-full ${getAvatarColor(displayName)} flex items-center justify-center text-white font-semibold`}
+            style={{ display: profileImageUrl ? 'none' : 'flex' }}
+          >
             {getInitials(displayName)}
           </div>
         </div>
