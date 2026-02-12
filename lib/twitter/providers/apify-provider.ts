@@ -69,7 +69,7 @@ export class ApifyProvider implements TwitterProvider {
         return {
           id: item.id || item.id_str,
           text: item.full_text || item.text || '',
-          created_at: item.created_at,
+          created_at: item.created_at || item.createdAt,
           retweet_count: item.retweet_count || 0,
           favorite_count: item.favorite_count || 0,
           reply_count: item.reply_count || 0,
