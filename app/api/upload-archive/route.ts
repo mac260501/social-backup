@@ -484,6 +484,12 @@ export async function POST(request: Request) {
         extended_entities: item.tweet?.extended_entities,
         entities: item.tweet?.entities,
         media: item.tweet?.extended_entities?.media || item.tweet?.entities?.media,
+        // Inject owner profile info so tweets display the correct username/avatar
+        author: {
+          username: accountProfile.username || username,
+          name: accountProfile.displayName || username,
+          profileImageUrl: accountProfile.avatarMediaUrl,
+        },
       })).filter((t: any) => t.id)
       stats.tweets = tweets.length
     }
@@ -653,8 +659,8 @@ export async function POST(request: Request) {
     const archiveProfile = {
       username: accountProfile.username || username,
       displayName: accountProfile.displayName || username,
-      profileImageUrl,
-      coverImageUrl,
+      profileImageUrl: profileImageUrl || accountProfile.avatarMediaUrl,
+      coverImageUrl: coverImageUrl || accountProfile.headerMediaUrl,
     }
 
     // Update stats to include media count

@@ -29,14 +29,11 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     const storedProfile = backup.data?.profile?.profileImageUrl
     const storedCover   = backup.data?.profile?.coverImageUrl
 
-    if (!storedProfile && !storedCover) return
-
-    // For scraped backups the stored value is a Twitter CDN URL (starts with https://).
-    // Use it immediately so the photo is visible while the background storage job runs.
+    // Use stored URL immediately so the photo is visible while the signed URL loads.
     if (storedProfile?.startsWith('http')) setProfileImageUrl(storedProfile)
     if (storedCover?.startsWith('http'))   setCoverImageUrl(storedCover)
 
-    // Then try to upgrade to a signed storage URL (works for both archive and scraped backups
+    // Try to get a signed storage URL (works for both archive and scraped backups
     // once the background upload job has finished).
     fetch(`/api/profile-media?backupId=${backup.id}`)
       .then(res => res.json())
@@ -273,7 +270,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         {activeTab === 'tweets' && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
             {backup.data?.tweets && backup.data.tweets.length > 0 ? (
-              <TweetsTab tweets={backup.data.tweets} searchQuery={searchQuery} ownerProfileImageUrl={profileImageUrl} />
+              <TweetsTab tweets={backup.data.tweets} searchQuery={searchQuery} ownerProfileImageUrl={profileImageUrl} ownerUsername={backup.data?.profile?.username} ownerDisplayName={backup.data?.profile?.displayName} />
             ) : (
               <div className="p-12 text-center text-gray-500 dark:text-gray-400">
                 No tweets found

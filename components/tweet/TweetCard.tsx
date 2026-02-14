@@ -5,9 +5,11 @@ import { TweetText } from './TweetText'
 interface TweetCardProps {
   tweet: any
   ownerProfileImageUrl?: string | null
+  ownerUsername?: string
+  ownerDisplayName?: string
 }
 
-export function TweetCard({ tweet, ownerProfileImageUrl }: TweetCardProps) {
+export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDisplayName }: TweetCardProps) {
   // Parse both ISO format and Twitter archive format: "Thu Mar 10 12:00:00 +0000 2022"
   const parseDate = (dateString: string): Date => {
     if (!dateString) return new Date(NaN)
@@ -68,8 +70,8 @@ export function TweetCard({ tweet, ownerProfileImageUrl }: TweetCardProps) {
     return name.substring(0, 2).toUpperCase()
   }
 
-  const username = tweet.author?.username || tweet.user?.screen_name || 'unknown'
-  const displayName = tweet.author?.name || tweet.user?.name || username
+  const username = tweet.author?.username || tweet.user?.screen_name || ownerUsername || 'unknown'
+  const displayName = tweet.author?.name || tweet.user?.name || ownerDisplayName || username
   const profileImageUrl = tweet.author?.profileImageUrl || tweet.user?.profile_image_url_https || tweet.user?.profile_image_url || ownerProfileImageUrl || null
   const text = tweet.full_text || tweet.text || ''
   const isRetweet = tweet.retweeted || text.startsWith('RT @')
@@ -93,25 +95,23 @@ export function TweetCard({ tweet, ownerProfileImageUrl }: TweetCardProps) {
     <div className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
       <div className="flex gap-3">
         {/* Avatar */}
-        <div className="flex-shrink-0">
-          {profileImageUrl ? (
-            <img
-              src={profileImageUrl}
-              alt={displayName}
-              className="w-12 h-12 rounded-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none'
-                const fallback = e.currentTarget.nextElementSibling as HTMLElement
-                if (fallback) fallback.style.display = 'flex'
-              }}
-            />
-          ) : null}
+        <div className="flex-shrink-0 relative w-12 h-12">
           <div
             className={`w-12 h-12 rounded-full ${getAvatarColor(displayName)} flex items-center justify-center text-white font-semibold`}
-            style={{ display: profileImageUrl ? 'none' : 'flex' }}
           >
             {getInitials(displayName)}
           </div>
+          {profileImageUrl && (
+            <img
+              key={profileImageUrl}
+              src={profileImageUrl}
+              alt={displayName}
+              className="absolute inset-0 w-12 h-12 rounded-full object-cover"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none'
+              }}
+            />
+          )}
         </div>
 
         {/* Tweet Content */}
