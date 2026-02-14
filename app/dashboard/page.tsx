@@ -1,13 +1,15 @@
 'use client'
 
-import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { createClient } from '@/lib/supabase/client'
 
 export default function Dashboard() {
-  const { data: session, status } = useSession()
   const router = useRouter()
+  const supabase = createClient()
+  const [loading, setLoading] = useState(true)
+  const [userEmail, setUserEmail] = useState('')
   const [uploading, setUploading] = useState(false)
   const [uploadResult, setUploadResult] = useState<any>(null)
   const [backupsCount, setBackupsCount] = useState<number>(0)
@@ -15,18 +17,28 @@ export default function Dashboard() {
   const [scraping, setScraping] = useState(false)
   const [scrapeResult, setScrapeResult] = useState<any>(null)
   const [maxTweets, setMaxTweets] = useState(1000)
+  const [scrapeUsername, setScrapeUsername] = useState('')
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/')
-    } else if (status === 'authenticated' && session?.user?.id) {
-      fetchBackupsCount()
-    }
-  }, [status, session, router])
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
+        router.push('/')
+      } else {
+        setUserEmail(user.email || user.user_metadata?.full_name || '')
+        setLoading(false)
+        fetchBackupsCount()
+      }
+    })
+  }, [])
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/')
+  }
 
   const fetchBackupsCount = async () => {
     try {
-      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
+      const response = await fetch('/api/backups')
       const result = await response.json()
       if (result.success) {
         setBackupsCount(result.backups?.length || 0)
@@ -47,8 +59,6 @@ export default function Dashboard() {
 
     const formData = new FormData()
     formData.append('file', file)
-    formData.append('userId', session?.user?.id || '')
-    formData.append('username', session?.user?.username || '')
 
     try {
       const response = await fetch('/api/upload-archive', {
@@ -59,7 +69,6 @@ export default function Dashboard() {
       const data = await response.json()
       setUploadResult(data)
 
-      // Refresh backups count after successful upload
       if (data.success) {
         fetchBackupsCount()
       }
@@ -71,7 +80,7 @@ export default function Dashboard() {
   }
 
   const handleScrapeNow = async () => {
-    if (!session?.user?.username) return
+    if (!scrapeUsername.trim()) return
 
     setScraping(true)
     setScrapeResult(null)
@@ -83,16 +92,14 @@ export default function Dashboard() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          username: session.user.username,
+          username: scrapeUsername.trim().replace(/^@/, ''),
           maxTweets: maxTweets,
-          userId: session.user.id,
         }),
       })
 
       const data = await response.json()
       setScrapeResult(data)
 
-      // Refresh backups count after successful scrape
       if (data.success) {
         fetchBackupsCount()
       }
@@ -103,12 +110,8 @@ export default function Dashboard() {
     }
   }
 
-  if (status === 'loading') {
+  if (loading) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>
-  }
-
-  if (!session) {
-    return null
   }
 
   return (
@@ -136,7 +139,7 @@ export default function Dashboard() {
             <div className="flex items-center space-x-2 sm:space-x-3">
               <ThemeToggle />
               <button
-                onClick={() => signOut({ callbackUrl: '/' })}
+                onClick={handleSignOut}
                 className="px-3 sm:px-4 py-2 text-xs sm:text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
               >
                 Sign out
@@ -167,7 +170,7 @@ export default function Dashboard() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg dark:shadow-gray-900/50 p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 mb-6">
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Welcome back, @{session.user?.username}!</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Welcome back, {userEmail}!</h2>
             <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 rounded-full text-xs sm:text-sm font-medium">
               Free Tier
             </span>
@@ -330,16 +333,16 @@ export default function Dashboard() {
             <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3 sm:p-4 mb-6">
               <h4 className="font-semibold text-purple-900 dark:text-purple-300 mb-2 text-sm sm:text-base">Instant Twitter Scraping</h4>
               <p className="text-xs sm:text-sm text-purple-800 dark:text-purple-400 mb-3">
-                Skip the wait! Scrape your Twitter data instantly without requesting an archive.
+                Skip the wait! Scrape any public Twitter account instantly.
               </p>
 
               <div className="mt-4 p-3 bg-purple-100 dark:bg-purple-900/30 rounded">
                 <p className="text-xs sm:text-sm font-semibold text-purple-900 dark:text-purple-300">✨ What gets scraped:</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2 text-xs sm:text-sm text-purple-800 dark:text-purple-400">
-                  <div>✓ Your latest tweets</div>
-                  <div>✓ Your media</div>
-                  <div>✓ Your followers</div>
-                  <div>✓ Your following</div>
+                  <div>✓ Latest tweets</div>
+                  <div>✓ Media</div>
+                  <div>✓ Followers</div>
+                  <div>✓ Following</div>
                   <div>✗ Likes (archive only)</div>
                   <div>✗ DMs (archive only)</div>
                 </div>
@@ -350,6 +353,19 @@ export default function Dashboard() {
             </div>
 
             <div className="border-2 border-dashed border-purple-300 dark:border-purple-700 rounded-lg p-4 sm:p-8 text-center">
+              <div className="mb-4">
+                <label className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Twitter username to scrape:
+                </label>
+                <input
+                  type="text"
+                  value={scrapeUsername}
+                  onChange={(e) => setScrapeUsername(e.target.value)}
+                  placeholder="@username"
+                  disabled={scraping}
+                  className="w-48 sm:w-56 px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg text-center text-sm sm:text-base mb-4"
+                />
+              </div>
               <div className="mb-4">
                 <label className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Number of tweets to scrape:
@@ -368,8 +384,8 @@ export default function Dashboard() {
 
               <button
                 onClick={handleScrapeNow}
-                disabled={scraping}
-                className={`inline-flex items-center px-4 sm:px-6 py-2 sm:py-3 bg-purple-500 dark:bg-purple-600 text-white rounded-lg hover:bg-purple-600 dark:hover:bg-purple-700 transition text-sm sm:text-base ${scraping ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={scraping || !scrapeUsername.trim()}
+                className={`inline-flex items-center px-4 sm:px-6 py-2 sm:py-3 bg-purple-500 dark:bg-purple-600 text-white rounded-lg hover:bg-purple-600 dark:hover:bg-purple-700 transition text-sm sm:text-base ${(scraping || !scrapeUsername.trim()) ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 {scraping ? (
                   <>

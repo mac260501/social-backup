@@ -1,14 +1,14 @@
 'use client'
 
-import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { BackupViewer } from '@/components/BackupViewer'
 import { Spinner } from '@/components/SkeletonLoader'
+import { createClient } from '@/lib/supabase/client'
 
 export default function BackupDetailPage() {
-  const { data: session, status } = useSession()
   const router = useRouter()
+  const supabase = createClient()
   const params = useParams()
   const backupId = params.backupId as string
 
@@ -17,20 +17,21 @@ export default function BackupDetailPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/')
-    } else if (status === 'authenticated' && session?.user?.id) {
-      fetchBackup()
-    }
-  }, [status, session, router, backupId])
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
+        router.push('/')
+      } else {
+        fetchBackup()
+      }
+    })
+  }, [backupId])
 
   const fetchBackup = async () => {
     try {
       setLoading(true)
       setError(null)
 
-      // Fetch all backups and find the one we need
-      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
+      const response = await fetch('/api/backups')
       const result = await response.json()
 
       if (!result.success) {
@@ -52,7 +53,7 @@ export default function BackupDetailPage() {
     }
   }
 
-  if (status === 'loading' || loading) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
         <div className="text-center">

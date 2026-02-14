@@ -1,19 +1,14 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyMediaOwnership } from '@/lib/auth-helpers'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
 
 export async function GET(request: Request) {
   try {
-    // Check authentication
-    const session = await getServerSession(authOptions)
-    if (!session || !session.user?.id) {
+    // Check authentication via Supabase
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
       return NextResponse.json({
         success: false,
         error: 'Unauthorized'
@@ -31,16 +26,18 @@ export async function GET(request: Request) {
     }
 
     // Verify ownership - user must own the backup to view its media
-    const isOwner = await verifyMediaOwnership(backupId, session.user.id)
+    const isOwner = await verifyMediaOwnership(backupId, user.id)
     if (!isOwner) {
-      console.warn(`[Security] User ${session.user.id} attempted to access media for backup ${backupId} they don't own`)
+      console.warn(`[Security] User ${user.id} attempted to access media for backup ${backupId} they don't own`)
       return NextResponse.json({
         success: false,
         error: 'Forbidden - you do not have access to this backup'
       }, { status: 403 })
     }
 
-    const { data: mediaFiles, error } = await supabase
+    const admin = createAdminClient()
+
+    const { data: mediaFiles, error } = await admin
       .from('media_files')
       .select('*')
       .eq('backup_id', backupId)
@@ -54,9 +51,9 @@ export async function GET(request: Request) {
     // Generate signed URLs for each media file (valid for 1 hour)
     const mediaWithUrls = await Promise.all(
       (mediaFiles || []).map(async (media) => {
-        const { data: signedUrlData } = await supabase.storage
+        const { data: signedUrlData } = await admin.storage
           .from('twitter-media')
-          .createSignedUrl(media.file_path, 3600) // 1 hour expiry
+          .createSignedUrl(media.file_path, 3600)
 
         return {
           ...media,

@@ -1,10 +1,7 @@
 import { createHash } from 'crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createAdminClient } from '@/lib/supabase/admin'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+const supabase = createAdminClient()
 
 export function createUuidFromString(str: string): string {
   const hash = createHash('sha256').update(str).digest('hex')
@@ -18,17 +15,14 @@ export function createUuidFromString(str: string): string {
 }
 
 /**
- * Verify that a backup belongs to a specific user
- * @param backupId - The backup ID to check
- * @param userId - The user ID (from session) to verify ownership
- * @returns true if user owns the backup, false otherwise
+ * Verify that a backup belongs to a specific user.
+ * With Supabase Auth the userId is already a UUID (auth.uid()),
+ * so we compare directly — no hashing needed.
  */
 export async function verifyBackupOwnership(
   backupId: string,
   userId: string
 ): Promise<boolean> {
-  const userUuid = createUuidFromString(userId)
-
   const { data, error } = await supabase
     .from('backups')
     .select('user_id')
@@ -39,14 +33,11 @@ export async function verifyBackupOwnership(
     return false
   }
 
-  return data.user_id === userUuid
+  return data.user_id === userId
 }
 
 /**
  * Verify that media files belong to a user through their backup
- * @param backupId - The backup ID to check
- * @param userId - The user ID (from session) to verify ownership
- * @returns true if user owns the backup (and therefore the media), false otherwise
  */
 export async function verifyMediaOwnership(
   backupId: string,

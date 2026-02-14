@@ -1,13 +1,7 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyMediaOwnership } from '@/lib/auth-helpers'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
 
 function extractFilename(url: string | undefined): string | null {
   if (!url) return null
@@ -16,8 +10,9 @@ function extractFilename(url: string | undefined): string | null {
 
 export async function GET(request: Request) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session || !session.user?.id) {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -28,13 +23,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: 'Backup ID is required' }, { status: 400 })
     }
 
-    const isOwner = await verifyMediaOwnership(backupId, session.user.id)
+    const isOwner = await verifyMediaOwnership(backupId, user.id)
     if (!isOwner) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
     }
 
+    const admin = createAdminClient()
+
     // Fetch the backup to get the stored profile image URLs (so we know which file is which)
-    const { data: backup, error: backupError } = await supabase
+    const { data: backup, error: backupError } = await admin
       .from('backups')
       .select('data')
       .eq('id', backupId)
@@ -49,7 +46,7 @@ export async function GET(request: Request) {
     const storedCoverImageFilename = extractFilename(profile?.coverImageUrl)
 
     // Fetch all profile_media files for this backup
-    const { data: profileFiles, error } = await supabase
+    const { data: profileFiles, error } = await admin
       .from('media_files')
       .select('file_path, file_name')
       .eq('backup_id', backupId)
@@ -104,10 +101,10 @@ export async function GET(request: Request) {
 
     const [avatarSigned, headerSigned] = await Promise.all([
       avatarFile
-        ? supabase.storage.from('twitter-media').createSignedUrl(avatarFile.file_path, signedUrlExpiry)
+        ? admin.storage.from('twitter-media').createSignedUrl(avatarFile.file_path, signedUrlExpiry)
         : Promise.resolve({ data: null }),
       headerFile
-        ? supabase.storage.from('twitter-media').createSignedUrl(headerFile.file_path, signedUrlExpiry)
+        ? admin.storage.from('twitter-media').createSignedUrl(headerFile.file_path, signedUrlExpiry)
         : Promise.resolve({ data: null }),
     ])
 

@@ -1,27 +1,29 @@
 'use client'
 
-import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { createClient } from '@/lib/supabase/client'
 
 export default function BackupsPage() {
-  const { data: session, status } = useSession()
   const router = useRouter()
+  const supabase = createClient()
   const [backups, setBackups] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/')
-    } else if (status === 'authenticated' && session?.user?.id) {
-      fetchBackups()
-    }
-  }, [status, session, router])
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
+        router.push('/')
+      } else {
+        fetchBackups()
+      }
+    })
+  }, [])
 
   const fetchBackups = async () => {
     try {
-      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
+      const response = await fetch('/api/backups')
       const result = await response.json()
 
       if (!result.success) {
@@ -52,7 +54,6 @@ export default function BackupsPage() {
         throw new Error(result.error || 'Failed to delete backup')
       }
 
-      // Refresh the backups list
       fetchBackups()
     } catch (error) {
       console.error('Error deleting backup:', error)
@@ -60,7 +61,12 @@ export default function BackupsPage() {
     }
   }
 
-  if (status === 'loading' || loading) {
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/')
+  }
+
+  if (loading) {
     return <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center text-gray-900 dark:text-white">Loading...</div>
   }
 
@@ -89,7 +95,7 @@ export default function BackupsPage() {
             <div className="flex items-center space-x-2 sm:space-x-3">
               <ThemeToggle />
               <button
-                onClick={() => signOut({ callbackUrl: '/' })}
+                onClick={handleSignOut}
                 className="px-3 sm:px-4 py-2 text-xs sm:text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
               >
                 Sign out

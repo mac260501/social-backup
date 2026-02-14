@@ -1,20 +1,14 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
+import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { verifyBackupOwnership } from '@/lib/auth-helpers'
-
-// Use service role for backend operations (bypasses RLS)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
 
 export async function DELETE(request: Request) {
   try {
-    // Check authentication
-    const session = await getServerSession(authOptions)
-    if (!session || !session.user?.id) {
+    // Check authentication via Supabase
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
       return NextResponse.json({
         success: false,
         error: 'Unauthorized'
@@ -29,19 +23,22 @@ export async function DELETE(request: Request) {
     }
 
     // Verify ownership - user must own the backup to delete it
-    const isOwner = await verifyBackupOwnership(backupId, session.user.id)
+    const isOwner = await verifyBackupOwnership(backupId, user.id)
     if (!isOwner) {
-      console.warn(`[Security] User ${session.user.id} attempted to delete backup ${backupId} they don't own`)
+      console.warn(`[Security] User ${user.id} attempted to delete backup ${backupId} they don't own`)
       return NextResponse.json({
         success: false,
         error: 'Forbidden - you do not have permission to delete this backup'
       }, { status: 403 })
     }
 
+    // Use admin client for database operations (bypasses RLS)
+    const admin = createAdminClient()
+
     console.log(`[Delete Backup] Starting deletion for backup ${backupId}`)
 
     // Step 1: Get all media files for this backup
-    const { data: mediaFiles, error: fetchError } = await supabase
+    const { data: mediaFiles, error: fetchError } = await admin
       .from('media_files')
       .select('file_path, backup_id')
       .eq('backup_id', backupId)
@@ -58,8 +55,7 @@ export async function DELETE(request: Request) {
 
     if (mediaFiles && mediaFiles.length > 0) {
       for (const media of mediaFiles) {
-        // Check if this file is referenced by any OTHER backups
-        const { data: otherRefs, error: refError } = await supabase
+        const { data: otherRefs, error: refError } = await admin
           .from('media_files')
           .select('backup_id')
           .eq('file_path', media.file_path)
@@ -70,7 +66,6 @@ export async function DELETE(request: Request) {
           continue
         }
 
-        // If no other backups reference this file, mark it for deletion
         if (!otherRefs || otherRefs.length === 0) {
           filesToDelete.push(media.file_path)
         } else {
@@ -82,7 +77,7 @@ export async function DELETE(request: Request) {
     console.log(`[Delete Backup] Will delete ${filesToDelete.length} orphaned files from storage`)
 
     // Step 3: Delete the backup (media_files records will cascade delete)
-    const { error } = await supabase
+    const { error } = await admin
       .from('backups')
       .delete()
       .eq('id', backupId)
@@ -97,13 +92,12 @@ export async function DELETE(request: Request) {
     // Step 4: Delete orphaned files from storage
     let deletedCount = 0
     if (filesToDelete.length > 0) {
-      const { data: storageData, error: storageError } = await supabase.storage
+      const { data: storageData, error: storageError } = await admin.storage
         .from('twitter-media')
         .remove(filesToDelete)
 
       if (storageError) {
         console.error('[Delete Backup] Error deleting from storage:', storageError)
-        // Don't fail the whole operation - backup is already deleted
       } else {
         deletedCount = filesToDelete.length
         console.log(`[Delete Backup] Deleted ${deletedCount} orphaned files from storage`)

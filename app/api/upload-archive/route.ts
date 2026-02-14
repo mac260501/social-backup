@@ -1,27 +1,13 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { createHash } from 'crypto'
+import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import yauzl from 'yauzl'
 import { promisify } from 'util'
 
 const openZip = promisify(yauzl.open)
 
-// Use service role for backend operations (bypasses RLS)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-function createUuidFromString(str: string): string {
-  const hash = createHash('sha256').update(str).digest('hex')
-  return [
-    hash.substring(0, 8),
-    hash.substring(8, 12),
-    hash.substring(12, 16),
-    hash.substring(16, 20),
-    hash.substring(20, 32),
-  ].join('-')
-}
+// Module-level admin client for helper functions
+const supabase = createAdminClient()
 
 function parseTwitterJSON(content: string) {
   const jsonMatch = content.match(/=\s*(\[[\s\S]*\])/)?.[1]
@@ -360,9 +346,17 @@ export async function POST(request: Request) {
   const fs = require('fs')
 
   try {
+    // Authenticate via Supabase
+    const authClient = await createClient()
+    const { data: { user }, error: authError } = await authClient.auth.getUser()
+    if (authError || !user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const supabase = createAdminClient()
+
     const formData = await request.formData()
     const file = formData.get('file') as File
-    const userId = formData.get('userId') as string
     const username = formData.get('username') as string
 
     if (!file) {
@@ -371,7 +365,7 @@ export async function POST(request: Request) {
 
     console.log('Processing archive for:', username)
 
-    const userUuid = createUuidFromString(userId)
+    const userUuid = user.id
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
@@ -570,17 +564,6 @@ export async function POST(request: Request) {
     }
 
     console.log('Stats:', stats)
-
-    // Save to database
-    const { data: existingProfile } = await supabase.from('profiles').select('id').eq('id', userUuid).single()
-    if (!existingProfile) {
-      await supabase.from('profiles').insert({
-        id: userUuid,
-        twitter_username: username,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-    }
 
     // Insert backup and get the ID
     const { data: backupData, error: backupError } = await supabase
