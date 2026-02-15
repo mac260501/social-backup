@@ -3,8 +3,13 @@ import { getTwitterProvider } from '@/lib/twitter/twitter-service'
 import type { Tweet } from '@/lib/twitter/types'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import {
+  parseRequestedTweetCount,
+  TWITTER_SCRAPE_LIMITS,
+} from '@/lib/platforms/twitter/limits'
 
 const supabase = createAdminClient()
+const TWITTER_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/
 
 /**
  * Download and store profile + cover photos for a scraped backup.
@@ -231,9 +236,35 @@ export async function POST(request: Request) {
     if (!username) {
       return NextResponse.json({ success: false, error: 'Username is required' }, { status: 400 })
     }
+    if (typeof username !== 'string' || !TWITTER_USERNAME_PATTERN.test(username)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid username format. Use 1-15 letters, numbers, or underscores.',
+      }, { status: 400 })
+    }
+
+    const parsedTweetLimit = parseRequestedTweetCount(maxTweets)
+    if (parsedTweetLimit === null) {
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid maxTweets value. It must be an integer.',
+      }, { status: 400 })
+    }
+    if (parsedTweetLimit < TWITTER_SCRAPE_LIMITS.minTweets) {
+      return NextResponse.json({
+        success: false,
+        error: `maxTweets must be at least ${TWITTER_SCRAPE_LIMITS.minTweets}.`,
+      }, { status: 400 })
+    }
+    if (parsedTweetLimit > TWITTER_SCRAPE_LIMITS.maxTweets) {
+      return NextResponse.json({
+        success: false,
+        error: `maxTweets exceeds limit (${TWITTER_SCRAPE_LIMITS.maxTweets}).`,
+      }, { status: 400 })
+    }
 
     const userUuid = user.id
-    const tweetsToScrape = maxTweets || 3200
+    const tweetsToScrape = parsedTweetLimit
 
     console.log(`[Scrape API] Starting scrape for @${username}, max tweets: ${tweetsToScrape}`)
 

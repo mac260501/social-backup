@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
+import fs from 'node:fs'
 import yauzl from 'yauzl'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { isZipUpload, TWITTER_UPLOAD_LIMITS } from '@/lib/platforms/twitter/limits'
 
 const supabase = createAdminClient()
 
@@ -64,6 +66,28 @@ async function extractMediaFiles(
     return mediaFolders.some(folder => entry.fileName.startsWith(folder + '/'))
       && !entry.fileName.endsWith('/') // Skip directories
   })
+
+  if (entries.length > TWITTER_UPLOAD_LIMITS.maxZipEntries) {
+    throw new Error(
+      `Archive contains too many entries (${entries.length}). Limit is ${TWITTER_UPLOAD_LIMITS.maxZipEntries}.`
+    )
+  }
+  if (mediaEntries.length > TWITTER_UPLOAD_LIMITS.maxMediaFiles) {
+    throw new Error(
+      `Archive contains too many media files (${mediaEntries.length}). Limit is ${TWITTER_UPLOAD_LIMITS.maxMediaFiles}.`
+    )
+  }
+
+  const totalUncompressedMediaBytes = mediaEntries.reduce((sum, entry: any) => {
+    const size = typeof entry.uncompressedSize === 'number' ? entry.uncompressedSize : 0
+    return sum + Math.max(size, 0)
+  }, 0)
+
+  if (totalUncompressedMediaBytes > TWITTER_UPLOAD_LIMITS.maxMediaBytes) {
+    throw new Error(
+      `Archive media payload is too large (${totalUncompressedMediaBytes} bytes). Limit is ${TWITTER_UPLOAD_LIMITS.maxMediaBytes} bytes.`
+    )
+  }
 
   console.log(`Found ${mediaEntries.length} media files to upload`)
 
@@ -310,7 +334,6 @@ function updateMediaUrls(
 
 export async function POST(request: Request) {
   let tmpPath = ''
-  const fs = require('fs')
 
   try {
     const authClient = await createServerClient()
@@ -329,6 +352,24 @@ export async function POST(request: Request) {
 
     if (!file) {
       return NextResponse.json({ success: false, error: 'No file uploaded' }, { status: 400 })
+    }
+    if (!isZipUpload(file.name, file.type)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid upload type. Please upload a .zip Twitter archive file.',
+      }, { status: 400 })
+    }
+    if (file.size <= 0) {
+      return NextResponse.json({
+        success: false,
+        error: 'Uploaded file is empty.',
+      }, { status: 400 })
+    }
+    if (file.size > TWITTER_UPLOAD_LIMITS.maxArchiveBytes) {
+      return NextResponse.json({
+        success: false,
+        error: `Archive exceeds size limit (${TWITTER_UPLOAD_LIMITS.maxArchiveBytes} bytes).`,
+      }, { status: 413 })
     }
 
     console.log('Processing archive for:', username)

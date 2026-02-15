@@ -9,6 +9,13 @@
 - `twitter/profile-media`
 - `twitter/download-archive`
 
+## Twitter safety limits
+- Upload archive size limit (`TWITTER_MAX_ARCHIVE_BYTES`, default `512MB`)
+- ZIP entry count limit (`TWITTER_MAX_ARCHIVE_ZIP_ENTRIES`, default `50000`)
+- Media file count limit (`TWITTER_MAX_ARCHIVE_MEDIA_FILES`, default `20000`)
+- Total uncompressed media bytes limit (`TWITTER_MAX_ARCHIVE_MEDIA_BYTES`, default `5GB`)
+- Scrape tweet bounds (`TWITTER_SCRAPE_MIN_TWEETS` / `TWITTER_SCRAPE_DEFAULT_TWEETS` / `TWITTER_SCRAPE_MAX_TWEETS`, default `10 / 500 / 1000`)
+
 ## Reserved folders
 - `instagram/`
 - `tiktok/`
