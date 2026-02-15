@@ -1,41 +1,190 @@
 'use client'
 
-import { useSession, signOut } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { User } from '@supabase/supabase-js'
+import { Download, Globe, MoreHorizontal, FileArchive } from 'lucide-react'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { createClient } from '@/lib/supabase/client'
+import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
+
+type PlatformTab = 'x' | 'instagram' | 'tiktok' | 'account'
+
+type UploadResult = {
+  success: boolean
+  message?: string
+  error?: string
+  stats?: {
+    tweets?: number
+    followers?: number
+    following?: number
+    likes?: number
+    dms?: number
+    media_files?: number
+  }
+}
+
+type ScrapeResult = {
+  success: boolean
+  message?: string
+  error?: string
+  data?: {
+    tweets?: number
+    followers?: number
+    following?: number
+    media_files?: number
+  }
+}
+
+type BackupItem = {
+  id: string
+  backup_type?: string | null
+  source?: string | null
+  backup_name?: string | null
+  backup_source?: string | null
+  uploaded_at?: string | null
+  created_at?: string | null
+  file_size?: number | null
+  stats?: {
+    tweets?: number
+    followers?: number
+    following?: number
+    likes?: number
+    dms?: number
+    media_files?: number
+  } | null
+  data?: {
+    profile?: {
+      username?: string
+    }
+    uploaded_file_size?: number
+  } | null
+}
+
+function SidebarButton({
+  active,
+  label,
+  onClick,
+  muted,
+}: {
+  active: boolean
+  label: string
+  onClick: () => void
+  muted?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition ${
+        active
+          ? 'bg-gradient-to-r from-[#2e5bff] to-[#4f46e5] text-white shadow-[0_10px_24px_rgba(79,70,229,0.35)]'
+          : muted
+            ? 'text-gray-400 dark:text-gray-500 hover:bg-white/5'
+            : 'text-gray-700 dark:text-gray-300 hover:bg-white/5'
+      }`}
+    >
+      {label}
+    </button>
+  )
+}
+
+function ComingSoonPanel({ platform, description }: { platform: string; description: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-300 bg-white/70 p-8 text-center dark:border-white/15 dark:bg-white/5">
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">Coming Soon</p>
+      <h2 className="mt-3 text-3xl font-bold text-gray-900 dark:text-white">{platform} backups are coming soon</h2>
+      <p className="mx-auto mt-3 max-w-2xl text-base text-gray-600 dark:text-gray-300">{description}</p>
+    </div>
+  )
+}
 
 export default function Dashboard() {
-  const { data: session, status } = useSession()
   const router = useRouter()
-  const [uploading, setUploading] = useState(false)
-  const [uploadResult, setUploadResult] = useState<any>(null)
+  const supabase = useMemo(() => createClient(), [])
+
+  const [user, setUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState<PlatformTab>('x')
+
+  const [displayName, setDisplayName] = useState('')
+  const [twitterUsername, setTwitterUsername] = useState('')
+
   const [backupsCount, setBackupsCount] = useState<number>(0)
   const [loadingBackups, setLoadingBackups] = useState(true)
+  const [backups, setBackups] = useState<BackupItem[]>([])
+
+  const [uploading, setUploading] = useState(false)
+  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
+
   const [scraping, setScraping] = useState(false)
-  const [scrapeResult, setScrapeResult] = useState<any>(null)
-  const [maxTweets, setMaxTweets] = useState(1000)
+  const [scrapeResult, setScrapeResult] = useState<ScrapeResult | null>(null)
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/')
-    } else if (status === 'authenticated' && session?.user?.id) {
-      fetchBackupsCount()
-    }
-  }, [status, session, router])
+    const init = async () => {
+      const {
+        data: { user: currentUser },
+      } = await supabase.auth.getUser()
 
-  const fetchBackupsCount = async () => {
+      if (!currentUser) {
+        router.push('/login')
+        return
+      }
+
+      setUser(currentUser)
+
+      const metadataName =
+        (currentUser.user_metadata?.full_name as string | undefined) ||
+        (currentUser.user_metadata?.name as string | undefined) ||
+        (currentUser.user_metadata?.display_name as string | undefined) ||
+        ''
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('display_name')
+        .eq('id', currentUser.id)
+        .maybeSingle()
+
+      const resolvedName =
+        profile?.display_name || metadataName || currentUser.email?.split('@')[0] || 'User'
+      setDisplayName(resolvedName)
+
+      if (!profile?.display_name && metadataName) {
+        await supabase.from('profiles').update({ display_name: metadataName }).eq('id', currentUser.id)
+      }
+
+      setTwitterUsername(
+        (currentUser.user_metadata?.user_name as string | undefined) ||
+          (currentUser.user_metadata?.preferred_username as string | undefined) ||
+          ''
+      )
+
+      await fetchBackupsSummary()
+      setAuthLoading(false)
+    }
+
+    init()
+  }, [router, supabase])
+
+  const fetchBackupsSummary = async () => {
     try {
-      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
-      const result = await response.json()
+      const response = await fetch('/api/backups')
+      const result = (await response.json()) as { success?: boolean; backups?: BackupItem[] }
       if (result.success) {
-        setBackupsCount(result.backups?.length || 0)
+        const list = result.backups || []
+        setBackups(list)
+        setBackupsCount(list.length)
       }
     } catch (error) {
       console.error('Error fetching backups count:', error)
     } finally {
       setLoadingBackups(false)
     }
+  }
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+    router.refresh()
   }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -47,8 +196,9 @@ export default function Dashboard() {
 
     const formData = new FormData()
     formData.append('file', file)
-    formData.append('userId', session?.user?.id || '')
-    formData.append('username', session?.user?.username || '')
+    if (twitterUsername) {
+      formData.append('username', twitterUsername)
+    }
 
     try {
       const response = await fetch('/api/upload-archive', {
@@ -56,22 +206,22 @@ export default function Dashboard() {
         body: formData,
       })
 
-      const data = await response.json()
+      const data = (await response.json()) as UploadResult
       setUploadResult(data)
 
-      // Refresh backups count after successful upload
       if (data.success) {
-        fetchBackupsCount()
+        fetchBackupsSummary()
       }
     } catch (error) {
-      setUploadResult({ success: false, error: 'Failed to upload' })
+      console.error('Upload error:', error)
+      setUploadResult({ success: false, error: 'Failed to upload archive' })
     } finally {
       setUploading(false)
     }
   }
 
   const handleScrapeNow = async () => {
-    if (!session?.user?.username) return
+    if (!twitterUsername.trim()) return
 
     setScraping(true)
     setScrapeResult(null)
@@ -83,366 +233,365 @@ export default function Dashboard() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          username: session.user.username,
-          maxTweets: maxTweets,
-          userId: session.user.id,
+          username: twitterUsername.trim(),
         }),
       })
 
-      const data = await response.json()
+      const data = (await response.json()) as ScrapeResult
       setScrapeResult(data)
 
-      // Refresh backups count after successful scrape
       if (data.success) {
-        fetchBackupsCount()
+        fetchBackupsSummary()
       }
     } catch (error) {
-      setScrapeResult({ success: false, error: 'Failed to scrape Twitter data' })
+      console.error('Scrape error:', error)
+      setScrapeResult({ success: false, error: 'Failed to scrape X data' })
     } finally {
       setScraping(false)
     }
   }
 
-  if (status === 'loading') {
-    return <div className="min-h-screen flex items-center justify-center">Loading...</div>
+  if (authLoading) {
+    return <ThemeLoadingScreen label="Loading your dashboard..." />
   }
 
-  if (!session) {
+  if (!user) {
     return null
   }
 
+  const recentBackups = backups.slice(0, 5)
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <nav className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center space-x-4 sm:space-x-8">
-              <h1 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white">Social Backup</h1>
-              <div className="hidden sm:flex space-x-1">
-                <button
-                  onClick={() => router.push('/dashboard')}
-                  className="px-3 sm:px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400"
-                >
-                  Dashboard
-                </button>
-                <button
-                  onClick={() => router.push('/dashboard/backups')}
-                  className="px-3 sm:px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
-                >
-                  Backups
-                </button>
+    <div className="min-h-screen bg-gray-100 text-gray-900 dark:bg-black dark:text-white">
+      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[260px_1fr]">
+        <aside className="flex flex-col border-b border-gray-200 bg-[#0a1434] p-4 lg:border-b-0 lg:border-r lg:border-white/10 lg:p-5">
+          <div className="mb-6 flex items-center justify-between lg:justify-start">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-200/70">Social Backup</p>
+              <h1 className="text-xl font-bold text-white">Dashboard</h1>
+            </div>
+            <div className="lg:hidden">
+              <ThemeToggle />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="px-2 text-xs font-semibold uppercase tracking-[0.18em] text-blue-200/70">Platforms</p>
+            <SidebarButton active={activeTab === 'x'} label="X (Twitter)" onClick={() => setActiveTab('x')} />
+            <SidebarButton active={activeTab === 'instagram'} label="Instagram" onClick={() => setActiveTab('instagram')} muted />
+            <SidebarButton active={activeTab === 'tiktok'} label="TikTok" onClick={() => setActiveTab('tiktok')} muted />
+          </div>
+
+          <div className="mt-auto space-y-2 pt-8">
+            <p className="px-2 text-xs font-semibold uppercase tracking-[0.18em] text-blue-200/70">Settings</p>
+            <SidebarButton active={activeTab === 'account'} label="Account" onClick={() => setActiveTab('account')} />
+          </div>
+
+          <button
+            onClick={handleSignOut}
+            className="mt-4 w-full rounded-xl border border-white/20 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+          >
+            Sign Out
+          </button>
+        </aside>
+
+        <main className="p-6 sm:p-8 lg:p-10">
+          <div className="mx-auto max-w-5xl">
+            <div className="mb-10 flex items-start justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Hi, {displayName}</h2>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Keep your social history safe and accessible.</p>
+              </div>
+              <div className="hidden items-center gap-4 lg:flex">
+                <div className="text-right">
+                  <p className="text-lg font-semibold text-gray-900 dark:text-white">{displayName}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Free Plan</p>
+                </div>
+                <ThemeToggle />
               </div>
             </div>
-            <div className="flex items-center space-x-2 sm:space-x-3">
-              <ThemeToggle />
-              <button
-                onClick={() => signOut({ callbackUrl: '/' })}
-                className="px-3 sm:px-4 py-2 text-xs sm:text-sm text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
-              >
-                Sign out
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
 
-      {/* Mobile Navigation */}
-      <div className="sm:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex">
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="flex-1 px-4 py-3 text-sm font-medium text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400"
-          >
-            Dashboard
-          </button>
-          <button
-            onClick={() => router.push('/dashboard/backups')}
-            className="flex-1 px-4 py-3 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent"
-          >
-            Backups
-          </button>
-        </div>
-      </div>
+            {activeTab === 'x' && (
+              <div className="space-y-10">
+                <section className="rounded-3xl border border-gray-200 bg-white p-6 dark:border-white/10 dark:bg-white/5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white">X (Twitter) Backup</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-300">Choose one: upload your full archive or take a current snapshot.</p>
+                  </div>
+                  <button
+                    onClick={() => router.push('/dashboard/backups')}
+                    className="rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1]"
+                  >
+                    View Backups ({backupsCount})
+                  </button>
+                </div>
+              </section>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-8">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg dark:shadow-gray-900/50 p-4 sm:p-6">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 mb-6">
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">Welcome back, @{session.user?.username}!</h2>
-            <span className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 rounded-full text-xs sm:text-sm font-medium">
-              Free Tier
-            </span>
-          </div>
+                <section className="grid gap-7 xl:grid-cols-2">
+                  <div className="rounded-3xl border border-gray-200 bg-white p-7 dark:border-white/10 dark:bg-white/5">
+                  <h4 className="text-base font-semibold text-gray-900 dark:text-white">Upload Archive</h4>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Best for complete history backup.</p>
 
-          {!loadingBackups && backupsCount > 0 && (
-            <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base sm:text-lg font-semibold text-blue-900 dark:text-blue-300">Your Backups</h3>
-                  <p className="text-xs sm:text-sm text-blue-700 dark:text-blue-400 mt-1">
-                    You have {backupsCount} backup{backupsCount !== 1 ? 's' : ''} saved
+                  <div className="mt-5 space-y-3">
+                    <details className="group rounded-xl border border-gray-200 bg-gray-50/70 p-3 dark:border-white/10 dark:bg-white/5">
+                      <summary className="cursor-pointer list-none text-sm font-medium text-gray-900 dark:text-white">
+                        <span className="inline-flex items-center gap-2">
+                          <span className="transition group-open:rotate-90">›</span>
+                          How to get your archive
+                        </span>
+                      </summary>
+                      <div className="mt-3 text-sm text-gray-700 dark:text-gray-300">
+                        <ol className="list-decimal space-y-1 pl-5">
+                          <li>Open X account data settings.</li>
+                          <li>Request your archive.</li>
+                          <li>Download the ZIP when it is ready.</li>
+                        </ol>
+                        <a
+                          href="https://twitter.com/settings/download_your_data"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 inline-block font-medium text-blue-600 hover:underline dark:text-blue-400"
+                        >
+                          Go to X archive page
+                        </a>
+                      </div>
+                    </details>
+
+                    <details className="group rounded-xl border border-gray-200 bg-gray-50/70 p-3 dark:border-white/10 dark:bg-white/5">
+                      <summary className="cursor-pointer list-none text-sm font-medium text-gray-900 dark:text-white">
+                        <span className="inline-flex items-center gap-2">
+                          <span className="transition group-open:rotate-90">›</span>
+                          What is included / not included
+                        </span>
+                      </summary>
+                      <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                        <div className="rounded-xl border border-gray-200 p-3 dark:border-white/10">
+                          <p className="font-medium text-gray-900 dark:text-white">Included</p>
+                          <ul className="mt-2 space-y-1 text-gray-600 dark:text-gray-300">
+                            <li>✓ Full tweet history</li>
+                            <li>✓ Media files</li>
+                            <li>✓ Followers & following</li>
+                            <li>✓ Likes & DMs</li>
+                          </ul>
+                        </div>
+                        <div className="rounded-xl border border-gray-200 p-3 dark:border-white/10">
+                          <p className="font-medium text-gray-900 dark:text-white">Not included</p>
+                          <ul className="mt-2 space-y-1 text-gray-600 dark:text-gray-300">
+                            <li>✗ New activity after archive date</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </details>
+                  </div>
+
+                  <div className="mt-6 rounded-2xl border-2 border-dashed border-gray-300 p-8 text-center dark:border-white/20">
+                    <input
+                      type="file"
+                      accept=".zip"
+                      onChange={handleFileUpload}
+                      disabled={uploading}
+                      className="hidden"
+                      id="file-upload"
+                    />
+                    <label
+                      htmlFor="file-upload"
+                      className={`inline-block rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1] ${uploading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                    >
+                      {uploading ? 'Processing...' : 'Choose ZIP File'}
+                    </label>
+                  </div>
+
+                  {uploadResult && (
+                    <p className={`mt-4 text-sm ${uploadResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      {uploadResult.success ? uploadResult.message || 'Archive uploaded successfully.' : uploadResult.error || 'Upload failed.'}
+                    </p>
+                  )}
+                </div>
+
+                  <div className="rounded-3xl border border-gray-200 bg-white p-7 dark:border-white/10 dark:bg-white/5">
+                  <h4 className="text-base font-semibold text-gray-900 dark:text-white">Take Current Snapshot</h4>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Fast backup of your current public profile data.</p>
+
+                  <details className="group mt-5 rounded-xl border border-gray-200 bg-gray-50/70 p-3 dark:border-white/10 dark:bg-white/5">
+                    <summary className="cursor-pointer list-none text-sm font-medium text-gray-900 dark:text-white">
+                      <span className="inline-flex items-center gap-2">
+                        <span className="transition group-open:rotate-90">›</span>
+                        What is included / not included
+                      </span>
+                    </summary>
+                    <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                      <div className="rounded-xl border border-gray-200 p-3 dark:border-white/10">
+                        <p className="font-medium text-gray-900 dark:text-white">Included</p>
+                        <ul className="mt-2 space-y-1 text-gray-600 dark:text-gray-300">
+                          <li>✓ Recent tweets</li>
+                          <li>✓ Media from fetched tweets</li>
+                          <li>✓ Followers & following</li>
+                        </ul>
+                      </div>
+                      <div className="rounded-xl border border-gray-200 p-3 dark:border-white/10">
+                        <p className="font-medium text-gray-900 dark:text-white">Not included</p>
+                        <ul className="mt-2 space-y-1 text-gray-600 dark:text-gray-300">
+                          <li>✗ Likes</li>
+                          <li>✗ DMs</li>
+                          <li>✗ Older content outside fetched range</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </details>
+
+                  <div className="mt-5 space-y-3">
+                    <input
+                      type="text"
+                      value={twitterUsername}
+                      onChange={(e) => setTwitterUsername(e.target.value.replace(/^@/, ''))}
+                      placeholder="X username"
+                      disabled={scraping}
+                      className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-white/20 dark:bg-black/40 dark:text-white"
+                    />
+                    <button
+                      onClick={handleScrapeNow}
+                      disabled={scraping || !twitterUsername.trim()}
+                      className="w-full rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {scraping ? 'Creating snapshot...' : 'Take Snapshot'}
+                    </button>
+                  </div>
+
+                  {scrapeResult && (
+                    <p className={`mt-4 text-sm ${scrapeResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      {scrapeResult.success ? scrapeResult.message || 'Scrape completed.' : scrapeResult.error || 'Scrape failed.'}
+                    </p>
+                  )}
+                </div>
+              </section>
+
+                <section className="rounded-3xl border border-gray-200 bg-white p-7 dark:border-white/10 dark:bg-white/5">
+                <div className="mb-4 flex items-center justify-between">
+                  <h4 className="text-base font-semibold text-gray-900 dark:text-white">Recent Backups</h4>
+                  <button
+                    onClick={() => router.push('/dashboard/backups')}
+                    className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    View all
+                  </button>
+                </div>
+
+                {loadingBackups ? (
+                  <p className="text-sm text-gray-600 dark:text-gray-300">Loading backups...</p>
+                ) : recentBackups.length === 0 ? (
+                  <p className="text-sm text-gray-600 dark:text-gray-300">No backups yet. Upload an archive or take a snapshot to get started.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {recentBackups.map((backup) => {
+                      const isArchive =
+                        backup.backup_type === 'full_archive' ||
+                        backup.source === 'archive' ||
+                        backup.backup_source === 'archive_upload' ||
+                        Boolean(backup.data?.uploaded_file_size)
+                      const usernameSuffix = backup.data?.profile?.username ? ` @${backup.data.profile.username}` : ''
+                      const methodLabel = isArchive
+                        ? `Archive Backup${usernameSuffix}`
+                        : `Current Snapshot${usernameSuffix}`
+                      const dateValue = backup.uploaded_at || backup.created_at
+                      const formattedDate = dateValue
+                        ? new Date(dateValue).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : 'Unknown date'
+                      const rawSize = backup.file_size || backup.data?.uploaded_file_size || 0
+                      const sizeLabel = rawSize > 0 ? `${(rawSize / (1024 * 1024)).toFixed(1)} MB` : 'Snapshot'
+                      const iconWrapClass = isArchive
+                        ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-500/20 dark:text-indigo-300'
+                        : 'bg-pink-50 text-pink-600 dark:bg-pink-500/20 dark:text-pink-300'
+
+                      return (
+                        <div
+                          key={backup.id}
+                          className="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-gray-50/70 p-4 transition hover:border-gray-300 dark:border-white/10 dark:bg-white/5 dark:hover:border-white/20 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div
+                            className="flex min-w-0 cursor-pointer items-center gap-4"
+                            onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
+                          >
+                            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${iconWrapClass}`}>
+                              {isArchive ? <FileArchive size={20} /> : <Globe size={20} />}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-[0.96rem] leading-tight font-semibold text-gray-900 dark:text-white">{methodLabel}</p>
+                              <p className="text-[0.9rem] text-gray-600 dark:text-gray-300">{formattedDate}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-6 text-sm text-gray-600 dark:text-gray-300 sm:gap-8">
+                            <div className="text-right">
+                              <p className="font-mono tabular-nums text-[0.9rem] font-medium leading-none text-gray-700 dark:text-gray-200">{sizeLabel}</p>
+                            </div>
+                            <button
+                              onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
+                              className="rounded-md p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
+                              aria-label="Open backup details"
+                            >
+                              <Download size={20} />
+                            </button>
+                            <button
+                              className="rounded-md p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
+                              aria-label="More actions"
+                            >
+                              <MoreHorizontal size={20} />
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+              </div>
+            )}
+
+            {activeTab === 'instagram' && (
+              <ComingSoonPanel
+                platform="Instagram"
+                description="We are keeping this minimal for now. Instagram backup support is on the roadmap and will appear here once ready."
+              />
+            )}
+
+            {activeTab === 'tiktok' && (
+              <ComingSoonPanel
+                platform="TikTok"
+                description="TikTok backup support is in planning. This section will activate as soon as we ship the first version."
+              />
+            )}
+
+            {activeTab === 'account' && (
+              <section className="rounded-3xl border border-gray-200 bg-white p-7 dark:border-white/10 dark:bg-white/5">
+                <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Account</h3>
+                <div className="mt-4 space-y-3 text-sm">
+                  <p className="text-gray-600 dark:text-gray-300">
+                    <span className="font-medium text-gray-900 dark:text-white">Name:</span> {displayName}
+                  </p>
+                  <p className="text-gray-600 dark:text-gray-300">
+                    <span className="font-medium text-gray-900 dark:text-white">Email:</span> {user.email}
+                  </p>
+                  <p className="text-gray-600 dark:text-gray-300">
+                    <span className="font-medium text-gray-900 dark:text-white">User ID:</span> {user.id}
                   </p>
                 </div>
                 <button
-                  onClick={() => router.push('/dashboard/backups')}
-                  className="w-full sm:w-auto px-4 py-2 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition text-xs sm:text-sm font-medium"
+                  onClick={handleSignOut}
+                  className="mt-6 rounded-full border border-gray-300 px-5 py-2 text-sm font-semibold text-gray-800 transition hover:bg-gray-100 dark:border-white/20 dark:text-white dark:hover:bg-white/10"
                 >
-                  View All →
+                  Sign Out
                 </button>
-              </div>
-            </div>
-          )}
-
-          <div className="border-t dark:border-gray-700 pt-6 mt-6">
-          <h3 className="text-base sm:text-lg font-semibold mb-4 text-gray-900 dark:text-white">📥 Backup Your Twitter Data</h3>
-
-            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 sm:p-4 mb-6">
-            <h4 className="font-semibold text-blue-900 dark:text-blue-300 mb-2 text-sm sm:text-base">How to get your Twitter archive:</h4>
-            <ol className="list-decimal list-inside space-y-2 text-xs sm:text-sm text-blue-800 dark:text-blue-400">
-                <li>
-                  Go to{' '}
-                  <a
-                    href="https://twitter.com/settings/download_your_data"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline font-semibold hover:text-blue-600 dark:hover:text-blue-300"
-                  >
-                    Twitter Settings → Download your data
-                  </a>
-                </li>
-                <li>Request your archive (Twitter will email you in 24 hours)</li>
-                <li>Download the ZIP file from the email</li>
-                <li>Upload it here to back everything up!</li>
-              </ol>
-
-              <div className="mt-4 p-3 bg-blue-100 dark:bg-blue-900/30 rounded">
-                <p className="text-xs sm:text-sm font-semibold text-blue-900 dark:text-blue-300">✨ What gets backed up:</p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2 text-xs sm:text-sm text-blue-800 dark:text-blue-400">
-                  <div>✓ All your tweets</div>
-                  <div>✓ All your media</div>
-                  <div>✓ Your followers</div>
-                  <div>✓ Your following</div>
-                  <div>✓ All your likes</div>
-                  <div>✓ Your DMs</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 sm:p-8 text-center hover:border-blue-400 dark:hover:border-blue-500 transition">
-              <input
-                type="file"
-                accept=".zip"
-                onChange={handleFileUpload}
-                disabled={uploading}
-                className="hidden"
-                id="file-upload"
-              />
-              <label
-                htmlFor="file-upload"
-                className={`cursor-pointer inline-flex items-center px-4 sm:px-6 py-2 sm:py-3 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition text-sm sm:text-base ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                {uploading ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Processing Archive...
-                  </>
-                ) : (
-                  '📤 Upload Twitter Archive (.zip)'
-                )}
-              </label>
-              <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-2">
-                Your archive will be processed securely
-              </p>
-            </div>
-
-            {uploadResult && (
-              <div className={`mt-6 p-4 sm:p-6 rounded-lg ${uploadResult.success ? 'bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800'}`}>
-                {uploadResult.success ? (
-                  <>
-                    <div className="flex items-center mb-4">
-                      <div className="w-8 h-8 sm:w-10 sm:h-10 bg-green-500 dark:bg-green-600 rounded-full flex items-center justify-center text-white text-lg sm:text-xl mr-3">
-                        ✓
-                      </div>
-                      <div>
-                        <h4 className="text-base sm:text-lg font-semibold text-green-900 dark:text-green-300">{uploadResult.message}</h4>
-                        <p className="text-xs sm:text-sm text-green-700 dark:text-green-400">Your data is now safely backed up!</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mt-4">
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">{uploadResult.stats.tweets.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Tweets</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-orange-600 dark:text-orange-400">{uploadResult.stats.media_files?.toLocaleString() || 0}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Media</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">{uploadResult.stats.followers.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Followers</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-green-600 dark:text-green-400">{uploadResult.stats.following.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Following</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-red-600 dark:text-red-400">{uploadResult.stats.likes.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Likes</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-indigo-600 dark:text-indigo-400">{uploadResult.stats.dms.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">DMs</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 text-center">
-                      <button
-                        onClick={() => router.push('/dashboard/backups')}
-                        className="px-6 py-3 bg-blue-500 dark:bg-blue-600 text-white rounded-lg hover:bg-blue-600 dark:hover:bg-blue-700 transition"
-                      >
-                        View All Backups →
-                      </button>
-                    </div>
-                  </>
-
-                ) : (
-                  <div className="flex items-center">
-                    <div className="w-10 h-10 bg-red-500 dark:bg-red-600 rounded-full flex items-center justify-center text-white text-xl mr-3">
-                      ✗
-                    </div>
-                    <div>
-                      <h4 className="text-lg font-semibold text-red-900 dark:text-red-300">Upload Failed</h4>
-                      <p className="text-sm text-red-700 dark:text-red-400">{uploadResult.error}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
+              </section>
             )}
           </div>
-
-          {/* Automated Scraping Section */}
-          <div className="border-t dark:border-gray-700 pt-6 mt-6">
-            <h3 className="text-base sm:text-lg font-semibold mb-4 text-gray-900 dark:text-white">🚀 Automated Backup (Scraping)</h3>
-
-            <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3 sm:p-4 mb-6">
-              <h4 className="font-semibold text-purple-900 dark:text-purple-300 mb-2 text-sm sm:text-base">Instant Twitter Scraping</h4>
-              <p className="text-xs sm:text-sm text-purple-800 dark:text-purple-400 mb-3">
-                Skip the wait! Scrape your Twitter data instantly without requesting an archive.
-              </p>
-
-              <div className="mt-4 p-3 bg-purple-100 dark:bg-purple-900/30 rounded">
-                <p className="text-xs sm:text-sm font-semibold text-purple-900 dark:text-purple-300">✨ What gets scraped:</p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-2 text-xs sm:text-sm text-purple-800 dark:text-purple-400">
-                  <div>✓ Your latest tweets</div>
-                  <div>✓ Your media</div>
-                  <div>✓ Your followers</div>
-                  <div>✓ Your following</div>
-                  <div>✗ Likes (archive only)</div>
-                  <div>✗ DMs (archive only)</div>
-                </div>
-                <p className="text-xs text-purple-700 dark:text-purple-400 mt-2 italic">
-                  Note: For complete history including likes and DMs, use archive upload.
-                </p>
-              </div>
-            </div>
-
-            <div className="border-2 border-dashed border-purple-300 dark:border-purple-700 rounded-lg p-4 sm:p-8 text-center">
-              <div className="mb-4">
-                <label className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Number of tweets to scrape:
-                </label>
-                <input
-                  type="number"
-                  value={maxTweets}
-                  onChange={(e) => setMaxTweets(parseInt(e.target.value) || 1000)}
-                  min="100"
-                  max="3200"
-                  step="100"
-                  disabled={scraping}
-                  className="w-28 sm:w-32 px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg text-center text-sm sm:text-base"
-                />
-              </div>
-
-              <button
-                onClick={handleScrapeNow}
-                disabled={scraping}
-                className={`inline-flex items-center px-4 sm:px-6 py-2 sm:py-3 bg-purple-500 dark:bg-purple-600 text-white rounded-lg hover:bg-purple-600 dark:hover:bg-purple-700 transition text-sm sm:text-base ${scraping ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                {scraping ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Scraping in Progress...
-                  </>
-                ) : (
-                  '⚡ Scrape Now'
-                )}
-              </button>
-            </div>
-
-            {scrapeResult && (
-              <div className={`mt-6 p-4 sm:p-6 rounded-lg ${scrapeResult.success ? 'bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800'}`}>
-                {scrapeResult.success ? (
-                  <>
-                    <div className="flex items-center mb-4">
-                      <div className="w-8 h-8 sm:w-10 sm:h-10 bg-green-500 dark:bg-green-600 rounded-full flex items-center justify-center text-white text-lg sm:text-xl mr-3">
-                        ✓
-                      </div>
-                      <div>
-                        <h4 className="text-base sm:text-lg font-semibold text-green-900 dark:text-green-300">{scrapeResult.message}</h4>
-                        <p className="text-xs sm:text-sm text-green-700 dark:text-green-400">Your data has been scraped and backed up!</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-4">
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-blue-600 dark:text-blue-400">{scrapeResult.data.tweets.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Tweets</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-orange-600 dark:text-orange-400">{scrapeResult.data.media_files?.toLocaleString() || 0}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Media</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-purple-600 dark:text-purple-400">{scrapeResult.data.followers.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Followers</div>
-                      </div>
-                      <div className="bg-white dark:bg-gray-700 rounded-lg p-3 sm:p-4 text-center">
-                        <div className="text-2xl sm:text-3xl font-bold text-green-600 dark:text-green-400">{scrapeResult.data.following.toLocaleString()}</div>
-                        <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-300 mt-1">Following</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 text-center">
-                      <button
-                        onClick={() => router.push('/dashboard/backups')}
-                        className="px-6 py-3 bg-purple-500 dark:bg-purple-600 text-white rounded-lg hover:bg-purple-600 dark:hover:bg-purple-700 transition"
-                      >
-                        View All Backups →
-                      </button>
-                    </div>
-                  </>
-
-                ) : (
-                  <div className="flex items-center">
-                    <div className="w-10 h-10 bg-red-500 dark:bg-red-600 rounded-full flex items-center justify-center text-white text-xl mr-3">
-                      ✗
-                    </div>
-                    <div>
-                      <h4 className="text-lg font-semibold text-red-900 dark:text-red-300">Scraping Failed</h4>
-                      <p className="text-sm text-red-700 dark:text-red-400">{scrapeResult.error}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        </main>
       </div>
     </div>
   )

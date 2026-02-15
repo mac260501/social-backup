@@ -1,27 +1,12 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { createHash } from 'crypto'
 import yauzl from 'yauzl'
 import { promisify } from 'util'
+import { createClient as createServerClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 const openZip = promisify(yauzl.open)
 
-// Use service role for backend operations (bypasses RLS)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-function createUuidFromString(str: string): string {
-  const hash = createHash('sha256').update(str).digest('hex')
-  return [
-    hash.substring(0, 8),
-    hash.substring(8, 12),
-    hash.substring(12, 16),
-    hash.substring(16, 20),
-    hash.substring(20, 32),
-  ].join('-')
-}
+const supabase = createAdminClient()
 
 function parseTwitterJSON(content: string) {
   const jsonMatch = content.match(/=\s*(\[[\s\S]*\])/)?.[1]
@@ -360,10 +345,19 @@ export async function POST(request: Request) {
   const fs = require('fs')
 
   try {
+    const authClient = await createServerClient()
+    const {
+      data: { user },
+      error: authError
+    } = await authClient.auth.getUser()
+
+    if (authError || !user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+
     const formData = await request.formData()
     const file = formData.get('file') as File
-    const userId = formData.get('userId') as string
-    const username = formData.get('username') as string
+    const username = (formData.get('username') as string) || user.email?.split('@')[0] || 'twitter-user'
 
     if (!file) {
       return NextResponse.json({ success: false, error: 'No file uploaded' }, { status: 400 })
@@ -371,7 +365,7 @@ export async function POST(request: Request) {
 
     console.log('Processing archive for:', username)
 
-    const userUuid = createUuidFromString(userId)
+    const userUuid = user.id
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
@@ -454,7 +448,13 @@ export async function POST(request: Request) {
     }
 
     // Parse account.js for owner profile info (avatar, cover, display name)
-    let accountProfile: { username?: string; displayName?: string; avatarMediaUrl?: string; headerMediaUrl?: string } = {}
+    let accountProfile: {
+      username?: string
+      displayName?: string
+      avatarMediaUrl?: string
+      headerMediaUrl?: string
+      platformUserId?: string
+    } = {}
     if (files['data/account.js']) {
       const accountData = parseTwitterJSON(files['data/account.js'])
       const account = accountData[0]?.account
@@ -464,6 +464,7 @@ export async function POST(request: Request) {
           displayName: account.accountDisplayName,
           avatarMediaUrl: account.avatarMediaUrl,
           headerMediaUrl: account.headerMediaUrl,
+          platformUserId: account.accountId,
         }
         console.log('Account profile:', accountProfile)
       }
@@ -571,26 +572,39 @@ export async function POST(request: Request) {
 
     console.log('Stats:', stats)
 
-    // Save to database
-    const { data: existingProfile } = await supabase.from('profiles').select('id').eq('id', userUuid).single()
-    if (!existingProfile) {
-      await supabase.from('profiles').insert({
-        id: userUuid,
-        twitter_username: username,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-    }
+    const resolvedTwitterUsername = accountProfile.username || username
+
+    const { data: socialProfile } = resolvedTwitterUsername
+      ? await supabase
+          .from('social_profiles')
+          .upsert(
+            {
+              user_id: userUuid,
+              platform: 'twitter',
+              platform_username: resolvedTwitterUsername,
+              platform_user_id: accountProfile.platformUserId || null,
+              display_name: accountProfile.displayName || resolvedTwitterUsername,
+              profile_url: `https://x.com/${resolvedTwitterUsername}`,
+              added_via: 'archive',
+              updated_at: new Date().toISOString(),
+            },
+            {
+              onConflict: 'user_id,platform,platform_username',
+            }
+          )
+          .select('id')
+          .single()
+      : { data: null }
 
     // Insert backup and get the ID
     const { data: backupData, error: backupError } = await supabase
       .from('backups')
       .insert({
         user_id: userUuid,
+        social_profile_id: socialProfile?.id || null,
+        backup_type: 'full_archive',
+        source: 'archive',
         data: { tweets, followers, following, likes, direct_messages: directMessages },
-        stats,
-        file_size: buffer.length,
-        archive_date: new Date().toISOString(),
     })
     .select()
     .single()
@@ -686,11 +700,10 @@ export async function POST(request: Request) {
       console.log('Successfully uploaded archive ZIP')
     }
 
-    // Update the backup record with the new stats, updated media URLs, and archive path
+    // Update the backup record with normalized content for the current schema.
     const { error: updateError } = await supabase
       .from('backups')
       .update({
-        stats: updatedStats,
         data: {
           tweets: updatedTweets,
           followers,
@@ -698,8 +711,10 @@ export async function POST(request: Request) {
           likes,
           direct_messages: updatedDMs,
           profile: archiveProfile,
+          stats: updatedStats,
+          archive_file_path: archiveUploadError ? null : archiveStoragePath,
+          uploaded_file_size: buffer.length,
         },
-        archive_file_path: archiveUploadError ? null : archiveStoragePath
       })
       .eq('id', backupId)
 

@@ -13,7 +13,6 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
-    // Initialize from the document class if available (SSR-safe)
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('theme') as Theme
       if (stored) return stored
@@ -23,18 +22,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
     return 'light'
   })
-  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
-    setMounted(true)
-    // Ensure DOM is in sync with state after mount
-    const currentTheme = localStorage.getItem('theme') as Theme
-    if (currentTheme === 'dark') {
+    if (theme === 'dark') {
       document.documentElement.classList.add('dark')
-    } else if (currentTheme === 'light') {
+    } else {
       document.documentElement.classList.remove('dark')
     }
-  }, [])
+  }, [theme])
 
   const toggleTheme = () => {
     const newTheme = theme === 'light' ? 'dark' : 'light'
@@ -46,10 +41,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } else {
       document.documentElement.classList.remove('dark')
     }
-  }
-
-  if (!mounted) {
-    return <>{children}</>
   }
 
   return (

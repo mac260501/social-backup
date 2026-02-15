@@ -1,23 +1,64 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
 import { verifyMediaOwnership } from '@/lib/auth-helpers'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient as createServerClient } from '@/lib/supabase/server'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+const supabase = createAdminClient()
 
 function extractFilename(url: string | undefined): string | null {
   if (!url) return null
   return url.split('/').pop()?.split('?')[0] || null
 }
 
+function getStringAtPath(source: unknown, path: string[]): string | null {
+  let current: unknown = source
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return null
+    current = (current as Record<string, unknown>)[key]
+  }
+  return typeof current === 'string' && current.trim().length > 0 ? current.trim() : null
+}
+
+function parseStoragePathFromUrl(url: string): string | null {
+  const clean = url.split('?')[0]
+  const publicMarker = '/storage/v1/object/public/twitter-media/'
+  const signedMarker = '/storage/v1/object/sign/twitter-media/'
+  const objectMarker = '/storage/v1/object/twitter-media/'
+
+  if (clean.includes(publicMarker)) return clean.split(publicMarker)[1] || null
+  if (clean.includes(signedMarker)) return clean.split(signedMarker)[1] || null
+  if (clean.includes(objectMarker)) return clean.split(objectMarker)[1] || null
+  return null
+}
+
+async function resolveCandidateToUrl(candidate: string | null, signedUrlExpiry = 3600): Promise<string | null> {
+  if (!candidate) return null
+  if (candidate.startsWith('http://') || candidate.startsWith('https://') || candidate.startsWith('data:')) {
+    return candidate
+  }
+
+  const storagePath = parseStoragePathFromUrl(candidate) || candidate.replace(/^\/+/, '')
+  if (!storagePath) return null
+
+  const { data: signedData } = await supabase.storage
+    .from('twitter-media')
+    .createSignedUrl(storagePath, signedUrlExpiry)
+
+  if (signedData?.signedUrl) return signedData.signedUrl
+
+  const { data: publicData } = supabase.storage.from('twitter-media').getPublicUrl(storagePath)
+  return publicData?.publicUrl || null
+}
+
 export async function GET(request: Request) {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session || !session.user?.id) {
+    const authClient = await createServerClient()
+    const {
+      data: { user },
+      error: authError
+    } = await authClient.auth.getUser()
+
+    if (authError || !user) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -28,7 +69,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: 'Backup ID is required' }, { status: 400 })
     }
 
-    const isOwner = await verifyMediaOwnership(backupId, session.user.id)
+    const isOwner = await verifyMediaOwnership(backupId, user.id)
     if (!isOwner) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
     }
@@ -36,7 +77,7 @@ export async function GET(request: Request) {
     // Fetch the backup to get the stored profile image URLs (so we know which file is which)
     const { data: backup, error: backupError } = await supabase
       .from('backups')
-      .select('data')
+      .select('data, user_id')
       .eq('id', backupId)
       .single()
 
@@ -48,28 +89,47 @@ export async function GET(request: Request) {
     const storedProfileImageFilename = extractFilename(profile?.profileImageUrl)
     const storedCoverImageFilename = extractFilename(profile?.coverImageUrl)
 
-    // Fetch all profile_media files for this backup
-    const { data: profileFiles, error } = await supabase
+    // Fetch media files for this backup. We avoid filtering on legacy columns
+    // (e.g. media_type) because newer schemas may not include them.
+    const { data: backupMediaFiles, error } = await supabase
       .from('media_files')
       .select('file_path, file_name')
       .eq('backup_id', backupId)
-      .eq('media_type', 'profile_media')
 
     if (error) {
       throw error
     }
 
-    if (!profileFiles || profileFiles.length === 0) {
-      return NextResponse.json({ success: true, profileImageUrl: null, coverImageUrl: null })
+    const looksLikeProfileMedia = (filePath?: string, fileName?: string) => {
+      const path = (filePath || '').toLowerCase()
+      const name = (fileName || '').toLowerCase()
+      return (
+        path.includes('/profile_media/') ||
+        path.includes('_media/profile_') ||
+        name.includes('profile') ||
+        name.includes('avatar') ||
+        name.includes('400x400') ||
+        name.includes('header') ||
+        name.includes('banner') ||
+        name.includes('cover')
+      )
     }
+
+    const mediaFileList = backupMediaFiles || []
+    const profileFiles = mediaFileList.filter(f => looksLikeProfileMedia(f.file_path, f.file_name))
+    const candidateFiles = profileFiles.length > 0 ? profileFiles : mediaFileList
 
     // Match by filename extracted from stored URL — exact, then partial, then heuristic fallback
     const findFile = (filename: string | null, excludePath?: string) => {
       if (filename) {
-        const exact = profileFiles.find(f => f.file_name === filename)
+        const exact = candidateFiles.find(f => f.file_name === filename && (!excludePath || f.file_path !== excludePath))
         if (exact) return exact
         const baseName = filename.replace(/\.[^.]+$/, '')
-        const partial = profileFiles.find(f => f.file_name.includes(baseName) || baseName.includes(f.file_name.replace(/\.[^.]+$/, '')))
+        const partial = candidateFiles.find(
+          f =>
+            (!excludePath || f.file_path !== excludePath) &&
+            (f.file_name.includes(baseName) || baseName.includes(f.file_name.replace(/\.[^.]+$/, '')))
+        )
         if (partial) return partial
       }
       return null
@@ -80,41 +140,122 @@ export async function GET(request: Request) {
 
     // Heuristic fallback if URL-based matching didn't work
     if (!avatarFile) {
-      avatarFile = profileFiles.find(f =>
+      avatarFile = candidateFiles.find(f =>
         f.file_name.includes('profile_image') || f.file_name.includes('avatar') || f.file_name.includes('400x400')
       ) || null
     }
     if (!headerFile) {
-      headerFile = profileFiles.find(f =>
+      headerFile = candidateFiles.find(f =>
         f.file_name.includes('header') || f.file_name.includes('banner') || f.file_name.includes('cover')
       ) || null
     }
 
     // Last resort: assign by position if we have two files and still missing one
     if (!avatarFile && !headerFile) {
-      avatarFile = profileFiles[0]
-      headerFile = profileFiles.length > 1 ? profileFiles[1] : null
+      avatarFile = candidateFiles[0]
+      headerFile = candidateFiles.length > 1 ? candidateFiles[1] : null
     } else if (!avatarFile && headerFile) {
-      avatarFile = profileFiles.find(f => f.file_path !== headerFile!.file_path) || null
+      avatarFile = candidateFiles.find(f => f.file_path !== headerFile!.file_path) || null
     } else if (avatarFile && !headerFile) {
-      headerFile = profileFiles.find(f => f.file_path !== avatarFile!.file_path) || null
+      headerFile = candidateFiles.find(f => f.file_path !== avatarFile!.file_path) || null
     }
 
     const signedUrlExpiry = 3600
 
+    let avatarFilePath = avatarFile?.file_path || null
+    let headerFilePath = headerFile?.file_path || null
+
+    // Fallback: if media_files matching is incomplete, inspect storage folders directly.
+    if (!avatarFilePath || !headerFilePath) {
+      const backupOwnerId = typeof backup.user_id === 'string' ? backup.user_id : user.id
+      const mediaFolders = [`${backupOwnerId}/profile_media`, `${backupOwnerId}/profiles_media`]
+
+      const listedFiles = (
+        await Promise.all(
+          mediaFolders.map(async (folder) => {
+            const { data } = await supabase.storage.from('twitter-media').list(folder, {
+              limit: 100,
+              sortBy: { column: 'name', order: 'desc' },
+            })
+            return (data || [])
+              .filter((entry) => !!entry.name && !entry.name.endsWith('/'))
+              .map((entry) => ({ file_path: `${folder}/${entry.name}`, file_name: entry.name }))
+          })
+        )
+      ).flat()
+
+      if (!avatarFilePath) {
+        const storageAvatar = listedFiles.find(
+          (f) =>
+            f.file_name.includes('profile_image') ||
+            f.file_name.includes('avatar') ||
+            f.file_name.includes('400x400')
+        )
+        avatarFilePath = storageAvatar?.file_path || listedFiles[0]?.file_path || null
+      }
+
+      if (!headerFilePath) {
+        const storageHeader = listedFiles.find(
+          (f) =>
+            f.file_name.includes('header') ||
+            f.file_name.includes('banner') ||
+            f.file_name.includes('cover')
+        )
+        headerFilePath =
+          storageHeader?.file_path ||
+          listedFiles.find((f) => f.file_path !== avatarFilePath)?.file_path ||
+          null
+      }
+    }
+
     const [avatarSigned, headerSigned] = await Promise.all([
-      avatarFile
-        ? supabase.storage.from('twitter-media').createSignedUrl(avatarFile.file_path, signedUrlExpiry)
+      avatarFilePath
+        ? supabase.storage.from('twitter-media').createSignedUrl(avatarFilePath, signedUrlExpiry)
         : Promise.resolve({ data: null }),
-      headerFile
-        ? supabase.storage.from('twitter-media').createSignedUrl(headerFile.file_path, signedUrlExpiry)
+      headerFilePath
+        ? supabase.storage.from('twitter-media').createSignedUrl(headerFilePath, signedUrlExpiry)
         : Promise.resolve({ data: null }),
+    ])
+
+    // Fallback to profile URLs embedded in backup payload when media-file matching doesn't resolve.
+    const firstTweetWithAvatar =
+      backup.data?.tweets?.find((tweet: unknown) => {
+        const t = tweet as Record<string, unknown>
+        const author = t.author as Record<string, unknown> | undefined
+        const user = t.user as Record<string, unknown> | undefined
+        return Boolean(
+          (author && typeof author.profileImageUrl === 'string' && author.profileImageUrl) ||
+          (user && typeof user.profile_image_url_https === 'string' && user.profile_image_url_https) ||
+          (user && typeof user.profile_image_url === 'string' && user.profile_image_url)
+        )
+      }) || null
+
+    const avatarFallbackCandidate =
+      profile?.profileImageUrl ||
+      profile?.profile_image_url_https ||
+      profile?.profile_image_url ||
+      getStringAtPath(backup, ['data', 'profileImageUrl']) ||
+      getStringAtPath(backup, ['data', 'accountProfile', 'avatarMediaUrl']) ||
+      getStringAtPath(firstTweetWithAvatar, ['author', 'profileImageUrl']) ||
+      getStringAtPath(firstTweetWithAvatar, ['user', 'profile_image_url_https']) ||
+      getStringAtPath(firstTweetWithAvatar, ['user', 'profile_image_url'])
+
+    const coverFallbackCandidate =
+      profile?.coverImageUrl ||
+      profile?.bannerImageUrl ||
+      profile?.profile_banner_url ||
+      getStringAtPath(backup, ['data', 'coverImageUrl']) ||
+      getStringAtPath(backup, ['data', 'accountProfile', 'headerMediaUrl'])
+
+    const [avatarFallbackUrl, coverFallbackUrl] = await Promise.all([
+      resolveCandidateToUrl(avatarFallbackCandidate, signedUrlExpiry),
+      resolveCandidateToUrl(coverFallbackCandidate, signedUrlExpiry),
     ])
 
     return NextResponse.json({
       success: true,
-      profileImageUrl: avatarSigned.data?.signedUrl || null,
-      coverImageUrl: headerSigned.data?.signedUrl || null,
+      profileImageUrl: avatarSigned.data?.signedUrl || avatarFallbackUrl || null,
+      coverImageUrl: headerSigned.data?.signedUrl || coverFallbackUrl || null,
     })
   } catch (error) {
     console.error('Error fetching profile media:', error)

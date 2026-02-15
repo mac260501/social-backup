@@ -1,21 +1,4 @@
-import { createHash } from 'crypto'
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-export function createUuidFromString(str: string): string {
-  const hash = createHash('sha256').update(str).digest('hex')
-  return [
-    hash.substring(0, 8),
-    hash.substring(8, 12),
-    hash.substring(12, 16),
-    hash.substring(16, 20),
-    hash.substring(20, 32),
-  ].join('-')
-}
+import { createAdminClient } from '@/lib/supabase/admin'
 
 /**
  * Verify that a backup belongs to a specific user
@@ -27,7 +10,7 @@ export async function verifyBackupOwnership(
   backupId: string,
   userId: string
 ): Promise<boolean> {
-  const userUuid = createUuidFromString(userId)
+  const supabase = createAdminClient()
 
   const { data, error } = await supabase
     .from('backups')
@@ -39,7 +22,7 @@ export async function verifyBackupOwnership(
     return false
   }
 
-  return data.user_id === userUuid
+  return data.user_id === userId
 }
 
 /**

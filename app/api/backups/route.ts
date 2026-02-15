@@ -1,20 +1,18 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/app/api/auth/[...nextauth]/route'
-import { createUuidFromString } from '@/lib/auth-helpers'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient as createServerClient } from '@/lib/supabase/server'
 
-// Use service role for backend operations (bypasses RLS)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+const supabase = createAdminClient()
 
 export async function GET(request: Request) {
   try {
-    // Check authentication
-    const session = await getServerSession(authOptions)
-    if (!session || !session.user?.id) {
+    const authClient = await createServerClient()
+    const {
+      data: { user },
+      error: authError
+    } = await authClient.auth.getUser()
+
+    if (authError || !user) {
       return NextResponse.json({
         success: false,
         error: 'Unauthorized'
@@ -24,25 +22,19 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const userId = searchParams.get('userId')
 
-    if (!userId) {
-      return NextResponse.json({ success: false, error: 'User ID is required' }, { status: 400 })
-    }
-
-    // Verify that the requested userId matches the authenticated session user
-    if (userId !== session.user.id) {
-      console.warn(`[Security] User ${session.user.id} attempted to fetch backups for user ${userId}`)
+    // Keep backward compatibility with callers that still send userId.
+    if (userId && userId !== user.id) {
+      console.warn(`[Security] User ${user.id} attempted to fetch backups for user ${userId}`)
       return NextResponse.json({
         success: false,
         error: 'Forbidden - you can only access your own backups'
       }, { status: 403 })
     }
 
-    const userUuid = createUuidFromString(userId)
-
     const { data, error } = await supabase
       .from('backups')
       .select('*')
-      .eq('user_id', userUuid)
+      .eq('user_id', user.id)
       .order('uploaded_at', { ascending: false })
 
     if (error) {

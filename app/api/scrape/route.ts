@@ -1,25 +1,10 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { createHash } from 'crypto'
 import { getTwitterProvider } from '@/lib/twitter/twitter-service'
 import type { Tweet } from '@/lib/twitter/types'
+import { createClient as createServerClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 
-// Use service role for backend operations (bypasses RLS)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-function createUuidFromString(str: string): string {
-  const hash = createHash('sha256').update(str).digest('hex')
-  return [
-    hash.substring(0, 8),
-    hash.substring(8, 12),
-    hash.substring(12, 16),
-    hash.substring(16, 20),
-    hash.substring(20, 32),
-  ].join('-')
-}
+const supabase = createAdminClient()
 
 /**
  * Download and store profile + cover photos for a scraped backup.
@@ -96,7 +81,7 @@ async function processScrapedProfileMedia(
   if (profileStoragePath || coverStoragePath) {
     const { data: backup } = await supabase
       .from('backups')
-      .select('data, stats')
+      .select('data')
       .eq('id', backupId)
       .single()
 
@@ -108,7 +93,7 @@ async function processScrapedProfileMedia(
       }
 
       // Recalculate media_files: tweet media (stats minus pre-counted profile photos) + actual uploaded profile photos
-      const currentStats = backup.stats || {}
+      const currentStats = backup.data?.stats || {}
       const previousTotal = currentStats.media_files || 0
       const expectedProfileCount = (profileImageUrl ? 1 : 0) + (coverImageUrl ? 1 : 0)
       const tweetOnlyCount = previousTotal - expectedProfileCount
@@ -117,8 +102,11 @@ async function processScrapedProfileMedia(
       await supabase
         .from('backups')
         .update({
-          data: { ...backup.data, profile: updatedProfile },
-          stats: { ...currentStats, media_files: updatedMediaFiles },
+          data: {
+            ...backup.data,
+            profile: updatedProfile,
+            stats: { ...currentStats, media_files: updatedMediaFiles },
+          },
         })
         .eq('id', backupId)
 
@@ -227,18 +215,24 @@ async function processScrapedMedia(userId: string, backupId: string, tweetsWithM
 
 export async function POST(request: Request) {
   try {
+    const authClient = await createServerClient()
+    const {
+      data: { user },
+      error: authError
+    } = await authClient.auth.getUser()
+
+    if (authError || !user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+
     const body = await request.json()
-    const { username, maxTweets, userId } = body
+    const { username, maxTweets } = body
 
     if (!username) {
       return NextResponse.json({ success: false, error: 'Username is required' }, { status: 400 })
     }
 
-    if (!userId) {
-      return NextResponse.json({ success: false, error: 'User ID is required' }, { status: 400 })
-    }
-
-    const userUuid = createUuidFromString(userId)
+    const userUuid = user.id
     const tweetsToScrape = maxTweets || 3200
 
     console.log(`[Scrape API] Starting scrape for @${username}, max tweets: ${tweetsToScrape}`)
@@ -277,11 +271,8 @@ export async function POST(request: Request) {
     // Save to Supabase
     const backupSnapshot = {
       user_id: userUuid,
-      backup_name: `Scraped on ${new Date().toLocaleDateString()}`,
-      backup_source: result.cost.provider,
-      scrape_provider: result.cost.provider,
-      scrape_cost: result.cost.total_cost,
-      tweets_scraped: result.tweets.length,
+      backup_type: 'snapshot',
+      source: 'scrape',
       data: {
         tweets: result.tweets,
         followers: result.followers,
@@ -294,17 +285,20 @@ export async function POST(request: Request) {
           profileImageUrl: result.metadata.profileImageUrl,
           coverImageUrl: result.metadata.coverImageUrl,
         },
+        stats: {
+          tweets: result.tweets.length,
+          followers: result.followers.length,
+          following: result.following.length,
+          likes: 0,
+          dms: 0,
+          media_files: totalMediaCount,
+        },
+        scrape: {
+          provider: result.cost.provider,
+          total_cost: result.cost.total_cost,
+          scraped_at: result.metadata.scraped_at,
+        },
       },
-      stats: {
-        tweets: result.tweets.length,
-        followers: result.followers.length,
-        following: result.following.length,
-        likes: 0,
-        dms: 0,
-        media_files: totalMediaCount,  // Count of media URLs found in tweets
-      },
-      file_size: 0, // No file for scraping
-      archive_date: result.metadata.scraped_at,
     }
 
     const { data: insertedBackup, error: backupError } = await supabase

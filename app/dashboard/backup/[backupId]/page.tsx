@@ -1,43 +1,42 @@
 'use client'
 
-import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { BackupViewer } from '@/components/BackupViewer'
-import { Spinner } from '@/components/SkeletonLoader'
+import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
+import { createClient } from '@/lib/supabase/client'
+
+type BackupRecord = {
+  id: string
+  [key: string]: unknown
+}
 
 export default function BackupDetailPage() {
-  const { data: session, status } = useSession()
   const router = useRouter()
+  const supabase = useMemo(() => createClient(), [])
   const params = useParams()
   const backupId = params.backupId as string
 
-  const [backup, setBackup] = useState<any>(null)
+  const [user, setUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [backup, setBackup] = useState<BackupRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/')
-    } else if (status === 'authenticated' && session?.user?.id) {
-      fetchBackup()
-    }
-  }, [status, session, router, backupId])
-
-  const fetchBackup = async () => {
+  const fetchBackup = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
 
-      // Fetch all backups and find the one we need
-      const response = await fetch(`/api/backups?userId=${encodeURIComponent(session?.user?.id || '')}`)
-      const result = await response.json()
+      const response = await fetch('/api/backups')
+      const result = (await response.json()) as { success?: boolean; error?: string; backups?: BackupRecord[] }
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to fetch backup')
       }
 
-      const foundBackup = result.backups?.find((b: any) => b.id === backupId)
+      const foundBackup = result.backups?.find((b) => b.id === backupId)
 
       if (!foundBackup) {
         throw new Error('Backup not found')
@@ -50,17 +49,33 @@ export default function BackupDetailPage() {
     } finally {
       setLoading(false)
     }
+  }, [backupId])
+
+  useEffect(() => {
+    const init = async () => {
+      const {
+        data: { user: currentUser }
+      } = await supabase.auth.getUser()
+
+      if (!currentUser) {
+        router.push('/login')
+        return
+      }
+
+      setUser(currentUser)
+      await fetchBackup()
+      setAuthLoading(false)
+    }
+
+    init()
+  }, [router, supabase, fetchBackup])
+
+  if (authLoading || loading) {
+    return <ThemeLoadingScreen label="Loading backup..." />
   }
 
-  if (status === 'loading' || loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <Spinner size="lg" />
-          <p className="mt-4 text-gray-600 dark:text-gray-400">Loading backup...</p>
-        </div>
-      </div>
-    )
+  if (!user) {
+    return null
   }
 
   if (error) {
