@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
 import yauzl from 'yauzl'
-import { promisify } from 'util'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-
-const openZip = promisify(yauzl.open)
 
 const supabase = createAdminClient()
 
@@ -21,40 +18,12 @@ function parseTwitterJSON(content: string) {
   return []
 }
 
-// Helper to extract file from yauzl
-function extractFileFromZip(zipfile: any, fileName: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    zipfile.on('entry', (entry: any) => {
-      if (entry.fileName === fileName) {
-        zipfile.openReadStream(entry, (err: any, readStream: any) => {
-          if (err) {
-            console.error(`Error reading ${fileName}:`, err)
-            resolve(null)
-            return
-          }
-          
-          const chunks: Buffer[] = []
-          readStream.on('data', (chunk: Buffer) => chunks.push(chunk))
-          readStream.on('end', () => {
-            const content = Buffer.concat(chunks).toString('utf8')
-            resolve(content)
-          })
-          readStream.on('error', () => resolve(null))
-        })
-      }
-    })
-    
-    zipfile.on('end', () => resolve(null))
-  })
-}
-
 // Helper to extract media files from ZIP
 async function extractMediaFiles(
   zipPath: string,
   userId: string,
   backupId: string
 ): Promise<{ mediaFiles: any[], uploadedCount: number }> {
-  const fs = require('fs')
   const mediaFolders = [
     'data/tweets_media',
     'data/direct_messages_media',
@@ -231,8 +200,7 @@ async function extractMediaFiles(
 function updateMediaUrls(
   tweets: any[],
   directMessages: any[],
-  mediaFiles: any[],
-  userId: string
+  mediaFiles: any[]
 ): { tweets: any[], directMessages: any[] } {
   // Create filename -> storage path mapping
   const fileMap = new Map<string, string>()
@@ -627,8 +595,7 @@ export async function POST(request: Request) {
     const { tweets: updatedTweets, directMessages: updatedDMs } = updateMediaUrls(
       tweets,
       directMessages,
-      mediaFiles,
-      userUuid
+      mediaFiles
     )
 
     // Resolve profile/cover image URLs from uploaded profile_media files

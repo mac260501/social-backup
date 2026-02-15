@@ -138,6 +138,6 @@ Claude Code needs to:
    - `scrapeTweets()` - Call Apify's tweet-scraper actor
    - `scrapeFollowers()` - Scrape followers list
    - `scrapeFollowing()` - Scrape following list
-3. Create API endpoint `app/api/scrape/route.ts` that uses `getTwitterProvider()`
+3. Create API endpoint `app/api/platforms/twitter/scrape/route.ts` that uses `getTwitterProvider()`
 4. Add "Backup Now" button to dashboard that calls this API
 5. Display scrape results and cost to user

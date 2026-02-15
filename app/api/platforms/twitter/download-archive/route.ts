@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     // Get backup and verify ownership
     const { data: backup, error: backupError } = await supabase
       .from('backups')
-      .select('archive_file_path, user_id, created_at')
+      .select('archive_file_path, user_id')
       .eq('id', backupId)
       .single()
 

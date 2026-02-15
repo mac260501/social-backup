@@ -3,7 +3,7 @@
 import { useRouter, useParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { BackupViewer } from '@/components/BackupViewer'
+import { BackupViewer } from '@/components/platforms/twitter/backup/BackupViewer'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
 import { createClient } from '@/lib/supabase/client'
 

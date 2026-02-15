@@ -2,8 +2,52 @@
 
 import { TweetText } from './TweetText'
 
+type TweetMediaItem = {
+  type?: 'photo' | 'video' | 'animated_gif' | string
+  media_url?: string
+  url?: string
+}
+
+type TweetData = {
+  author?: {
+    username?: string
+    name?: string
+    profileImageUrl?: string
+  }
+  user?: {
+    screen_name?: string
+    name?: string
+    profile_image_url_https?: string
+    profile_image_url?: string
+  }
+  tweet?: {
+    extended_entities?: {
+      media?: TweetMediaItem[]
+    }
+    entities?: {
+      media?: TweetMediaItem[]
+    }
+  }
+  media?: TweetMediaItem[]
+  extended_entities?: {
+    media?: TweetMediaItem[]
+  }
+  entities?: {
+    media?: TweetMediaItem[]
+  }
+  full_text?: string
+  text?: string
+  created_at?: string
+  retweeted?: boolean
+  in_reply_to_status_id?: string | null
+  in_reply_to_user_id?: string | null
+  reply_count?: number
+  retweet_count?: number
+  favorite_count?: number
+}
+
 interface TweetCardProps {
-  tweet: any
+  tweet: TweetData
   ownerProfileImageUrl?: string | null
   ownerUsername?: string
   ownerDisplayName?: string
@@ -78,7 +122,7 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
   const isReply = tweet.in_reply_to_status_id || tweet.in_reply_to_user_id
 
   // Extract media from tweet (supports multiple Twitter data formats)
-  const getMediaFromTweet = () => {
+  const getMediaFromTweet = (): TweetMediaItem[] => {
     return (
       tweet.media ||
       tweet.extended_entities?.media ||
@@ -162,7 +206,7 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
               media.length === 3 ? 'grid-cols-2' :
               'grid-cols-2'
             }`}>
-              {media.slice(0, 4).map((mediaItem: any, index: number) => (
+              {media.slice(0, 4).map((mediaItem, index: number) => (
                 <div
                   key={index}
                   className={`relative ${

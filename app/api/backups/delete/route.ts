@@ -96,7 +96,7 @@ export async function DELETE(request: Request) {
     // Step 4: Delete orphaned files from storage
     let deletedCount = 0
     if (filesToDelete.length > 0) {
-      const { data: storageData, error: storageError } = await supabase.storage
+      const { error: storageError } = await supabase.storage
         .from('twitter-media')
         .remove(filesToDelete)
 

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
 import { createClient } from '@/lib/supabase/client'
+import { isArchiveBackup } from '@/lib/platforms/backup'
 
 type BackupRecord = {
   id: string
@@ -24,6 +25,10 @@ type BackupRecord = {
     likes?: number
     dms?: number
   }
+}
+
+function backupLabel(backup: BackupRecord) {
+  return isArchiveBackup(backup) ? 'Archive Backup' : 'Snapshot Backup'
 }
 
 function formatDate(dateString?: string) {
@@ -49,14 +54,6 @@ function parseSizeValue(value: unknown) {
     if (Number.isFinite(parsed) && parsed > 0) return parsed
   }
   return 0
-}
-
-function backupLabel(backup: BackupRecord) {
-  const isArchive =
-    backup.backup_type === 'full_archive' ||
-    backup.backup_source === 'archive_upload' ||
-    backup.source === 'archive'
-  return isArchive ? 'Archive Backup' : 'Snapshot Backup'
 }
 
 export default function BackupsPage() {
@@ -130,12 +127,6 @@ export default function BackupsPage() {
       alert('Failed to delete backup. Please try again.')
     }
   }
-
-  const isArchiveBackup = (backup: BackupRecord) =>
-    backup.backup_type === 'full_archive' ||
-    backup.backup_source === 'archive_upload' ||
-    backup.source === 'archive' ||
-    Boolean(backup.data?.archive_file_path)
 
   const resolveBackupSize = (backup: BackupRecord) => {
     const candidates: unknown[] = [

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { TweetCard } from '@/components/tweet/TweetCard'
+import { TweetCard } from '@/components/platforms/twitter/backup/TweetCard'
 
 interface BackupViewerProps {
   backup: BackupRecord
@@ -179,7 +179,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     if (normalizedAvatar) setProfileImageUrl(normalizedAvatar)
     if (normalizedCover) setCoverImageUrl(normalizedCover)
 
-    fetch(`/api/profile-media?backupId=${backup.id}`)
+    fetch(`/api/platforms/twitter/profile-media?backupId=${backup.id}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -197,7 +197,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const handleDownloadArchive = async () => {
     try {
       setIsDownloading(true)
-      const response = await fetch(`/api/download-archive?backupId=${backup.id}`)
+      const response = await fetch(`/api/platforms/twitter/download-archive?backupId=${backup.id}`)
       const data = await response.json()
 
       if (!response.ok) {
