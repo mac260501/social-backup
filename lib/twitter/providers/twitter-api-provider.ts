@@ -1,5 +1,5 @@
 import { TwitterProvider } from '../twitter-provider.interface'
-import { Tweet, Follower, Following, TwitterScrapeResult } from '../types'
+import { Tweet, Follower, Following, TwitterScrapeOptions, TwitterScrapeResult } from '../types'
 
 /**
  * Twitter Official API Provider
@@ -19,19 +19,37 @@ export class TwitterApiProvider implements TwitterProvider {
     this.bearerToken = process.env.TWITTER_BEARER_TOKEN || ''
   }
 
-  async scrapeTweets(username: string, maxTweets: number): Promise<Tweet[]> {
+  async scrapeTweets(_username: string, _maxTweets: number): Promise<Tweet[]> {
+    void _username
+    void _maxTweets
     throw new Error('Twitter API provider not implemented yet - use Apify for now')
   }
 
-  async scrapeFollowers(username: string): Promise<Follower[]> {
+  async scrapeReplies(_username: string, _maxTweets: number): Promise<Tweet[]> {
+    void _username
+    void _maxTweets
     throw new Error('Twitter API provider not implemented yet - use Apify for now')
   }
 
-  async scrapeFollowing(username: string): Promise<Following[]> {
+  async scrapeFollowers(_username: string): Promise<Follower[]> {
+    void _username
     throw new Error('Twitter API provider not implemented yet - use Apify for now')
   }
 
-  async scrapeAll(username: string, maxTweets: number): Promise<TwitterScrapeResult> {
+  async scrapeFollowing(_username: string): Promise<Following[]> {
+    void _username
+    throw new Error('Twitter API provider not implemented yet - use Apify for now')
+  }
+
+  async scrapeProfile(_username: string): Promise<{ profileImageUrl?: string; coverImageUrl?: string; displayName?: string }> {
+    void _username
+    throw new Error('Twitter API provider not implemented yet - use Apify for now')
+  }
+
+  async scrapeAll(_username: string, _maxTweets: number, _options?: TwitterScrapeOptions): Promise<TwitterScrapeResult> {
+    void _username
+    void _maxTweets
+    void _options
     throw new Error('Twitter API provider not implemented yet - use Apify for now')
   }
 

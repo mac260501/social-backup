@@ -9,12 +9,25 @@ import { createClient } from '@/lib/supabase/client'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
 import { InstagramPanel } from '@/components/dashboard/platforms/InstagramPanel'
 import { TikTokPanel } from '@/components/dashboard/platforms/TikTokPanel'
-import { TwitterPanel, type DashboardBackupItem, type ScrapeResult, type UploadResult } from '@/components/dashboard/platforms/TwitterPanel'
+import {
+  TwitterPanel,
+  type DashboardBackupItem,
+  type ScrapeResult,
+  type TwitterScrapeTargets,
+  type UploadResult,
+} from '@/components/dashboard/platforms/TwitterPanel'
 import { inferBackupPlatform } from '@/lib/platforms/backup'
 import { listPlatformDefinitions } from '@/lib/platforms/registry'
 import type { PlatformId } from '@/lib/platforms/types'
 
 type DashboardTab = PlatformId | 'account'
+const DEFAULT_TWITTER_SCRAPE_TARGETS: TwitterScrapeTargets = {
+  profile: true,
+  tweets: true,
+  replies: true,
+  followers: true,
+  following: true,
+}
 
 function SidebarButton({
   active,
@@ -64,6 +77,7 @@ export default function Dashboard() {
 
   const [scraping, setScraping] = useState(false)
   const [scrapeResult, setScrapeResult] = useState<ScrapeResult | null>(null)
+  const [twitterScrapeTargets, setTwitterScrapeTargets] = useState<TwitterScrapeTargets>(DEFAULT_TWITTER_SCRAPE_TARGETS)
 
   useEffect(() => {
     const init = async () => {
@@ -133,6 +147,42 @@ export default function Dashboard() {
     router.refresh()
   }
 
+  const handleDeleteBackup = async (backupId: string, label: string) => {
+    if (!confirm(`Delete this ${label}? This cannot be undone.`)) return
+
+    try {
+      const response = await fetch(`/api/backups/delete?backupId=${encodeURIComponent(backupId)}`, {
+        method: 'DELETE',
+      })
+      const result = await response.json()
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete backup')
+      }
+
+      await fetchBackupsSummary()
+    } catch (error) {
+      console.error('Delete backup error:', error)
+      alert('Failed to delete backup. Please try again.')
+    }
+  }
+
+  const handleDownloadBackup = async (backupId: string) => {
+    try {
+      const response = await fetch(`/api/platforms/twitter/download-archive?backupId=${encodeURIComponent(backupId)}`)
+      const data = await response.json()
+
+      if (!response.ok || !data.success || !data.downloadUrl) {
+        throw new Error(data.error || 'This backup does not have a downloadable archive.')
+      }
+
+      window.location.href = data.downloadUrl
+    } catch (error) {
+      console.error('Download backup error:', error)
+      alert(error instanceof Error ? error.message : 'Failed to download backup.')
+    }
+  }
+
   const handleFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -166,8 +216,12 @@ export default function Dashboard() {
     }
   }
 
-  const handleScrapeNow = async () => {
+  const handleScrapeNow = async (targets: TwitterScrapeTargets) => {
     if (!twitterUsername.trim()) return
+    if (!Object.values(targets).some(Boolean)) {
+      setScrapeResult({ success: false, error: 'Select at least one data type to scrape.' })
+      return
+    }
 
     setScraping(true)
     setScrapeResult(null)
@@ -180,6 +234,7 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           username: twitterUsername.trim(),
+          targets,
         }),
       })
 
@@ -274,8 +329,12 @@ export default function Dashboard() {
                 scrapeResult={scrapeResult}
                 twitterUsername={twitterUsername}
                 setTwitterUsername={setTwitterUsername}
+                scrapeTargets={twitterScrapeTargets}
+                setScrapeTargets={setTwitterScrapeTargets}
                 onViewBackups={() => router.push('/dashboard/backups')}
                 onOpenBackup={(backupId) => router.push(`/dashboard/backup/${backupId}`)}
+                onDownloadBackup={handleDownloadBackup}
+                onDeleteBackup={handleDeleteBackup}
                 onUploadChange={handleFileUpload}
                 onScrapeNow={handleScrapeNow}
               />

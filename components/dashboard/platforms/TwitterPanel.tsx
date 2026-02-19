@@ -1,6 +1,14 @@
-import { Download, FileArchive, Globe, MoreHorizontal } from 'lucide-react'
+import { FileArchive, Globe } from 'lucide-react'
 import { formatBackupMethodLabel, isArchiveBackup } from '@/lib/platforms/backup'
 import type { ChangeEvent } from 'react'
+
+export type TwitterScrapeTargets = {
+  profile: boolean
+  tweets: boolean
+  replies: boolean
+  followers: boolean
+  following: boolean
+}
 
 export type DashboardBackupItem = {
   id: string
@@ -49,10 +57,14 @@ type TwitterPanelProps = {
   scrapeResult: ScrapeResult | null
   twitterUsername: string
   setTwitterUsername: (value: string) => void
+  scrapeTargets: TwitterScrapeTargets
+  setScrapeTargets: (value: TwitterScrapeTargets) => void
   onViewBackups: () => void
   onOpenBackup: (backupId: string) => void
+  onDownloadBackup: (backupId: string) => Promise<void>
+  onDeleteBackup: (backupId: string, label: string) => Promise<void>
   onUploadChange: (e: ChangeEvent<HTMLInputElement>) => Promise<void>
-  onScrapeNow: () => Promise<void>
+  onScrapeNow: (targets: TwitterScrapeTargets) => Promise<void>
 }
 
 export function TwitterPanel({
@@ -65,11 +77,18 @@ export function TwitterPanel({
   scrapeResult,
   twitterUsername,
   setTwitterUsername,
+  scrapeTargets,
+  setScrapeTargets,
   onViewBackups,
   onOpenBackup,
+  onDownloadBackup,
+  onDeleteBackup,
   onUploadChange,
   onScrapeNow,
 }: TwitterPanelProps) {
+  const selectedTargetCount = Object.values(scrapeTargets).filter(Boolean).length
+  const hasSelectedTargets = selectedTargetCount > 0
+
   return (
     <div className="space-y-10">
       <section className="rounded-3xl border border-gray-200 bg-white p-6 dark:border-white/10 dark:bg-white/5">
@@ -183,9 +202,10 @@ export function TwitterPanel({
               <div className="rounded-xl border border-gray-200 p-3 dark:border-white/10">
                 <p className="font-medium text-gray-900 dark:text-white">Included</p>
                 <ul className="mt-2 space-y-1 text-gray-600 dark:text-gray-300">
-                  <li>✓ Recent tweets</li>
-                  <li>✓ Media from fetched tweets</li>
-                  <li>✓ Followers & following</li>
+                  <li>✓ Profile info</li>
+                  <li>✓ Posts / replies (selectable)</li>
+                  <li>✓ Followers / following (selectable)</li>
+                  <li>✓ Media from fetched posts/replies</li>
                 </ul>
               </div>
               <div className="rounded-xl border border-gray-200 p-3 dark:border-white/10">
@@ -208,9 +228,37 @@ export function TwitterPanel({
               disabled={scraping}
               className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-white/20 dark:bg-black/40 dark:text-white"
             />
+            <div className="rounded-2xl border border-gray-200 p-4 dark:border-white/10">
+              <p className="text-sm font-medium text-gray-900 dark:text-white">
+                Choose what to scrape ({selectedTargetCount} selected)
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {([
+                  ['profile', 'Profile info'],
+                  ['tweets', 'Tweets (posts)'],
+                  ['replies', 'Replies'],
+                  ['followers', 'Followers'],
+                  ['following', 'Following'],
+                ] as Array<[keyof TwitterScrapeTargets, string]>).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-white/10">
+                    <input
+                      type="checkbox"
+                      checked={scrapeTargets[key]}
+                      disabled={scraping}
+                      onChange={(e) => setScrapeTargets({ ...scrapeTargets, [key]: e.target.checked })}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-gray-700 dark:text-gray-300">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                Media is collected from selected posts/replies so each media item stays linked to its original post.
+              </p>
+            </div>
             <button
-              onClick={onScrapeNow}
-              disabled={scraping || !twitterUsername.trim()}
+              onClick={() => onScrapeNow(scrapeTargets)}
+              disabled={scraping || !twitterUsername.trim() || !hasSelectedTargets}
               className="w-full rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {scraping ? 'Creating snapshot...' : 'Take Snapshot'}
@@ -279,22 +327,28 @@ export function TwitterPanel({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-6 text-sm text-gray-600 dark:text-gray-300 sm:gap-8">
-                    <div className="text-right">
+                  <div className="flex items-center gap-2">
+                    <div className="mr-2 text-right">
                       <p className="font-mono tabular-nums text-[0.9rem] font-medium leading-none text-gray-700 dark:text-gray-200">{sizeLabel}</p>
                     </div>
                     <button
                       onClick={() => onOpenBackup(backup.id)}
-                      className="rounded-md p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
-                      aria-label="Open backup details"
+                      className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-200 dark:bg-white dark:text-black"
                     >
-                      <Download size={20} />
+                      View
                     </button>
                     <button
-                      className="rounded-md p-2 text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white"
-                      aria-label="More actions"
+                      onClick={() => onDownloadBackup(backup.id)}
+                      disabled={!isArchive}
+                      className="rounded-full border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/20 dark:text-white dark:hover:bg-white/10"
                     >
-                      <MoreHorizontal size={20} />
+                      Download
+                    </button>
+                    <button
+                      onClick={() => onDeleteBackup(backup.id, methodLabel)}
+                      className="rounded-full border border-red-500/40 bg-red-500/15 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-500/25"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>

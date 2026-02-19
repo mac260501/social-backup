@@ -15,6 +15,7 @@ type ProfileMediaItem = {
   fallbackImageUrl?: string
   type: 'photo' | 'video' | 'animated_gif'
   variantUrls?: string[]
+  tweetUrl?: string
   tweetText: string
   createdAt?: string
   likes: number
@@ -51,16 +52,34 @@ interface BackupProfile {
   coverImageUrl?: string
   bannerImageUrl?: string
   profile_banner_url?: string
+  followersCount?: number | string
+  followingCount?: number | string
+  followers_count?: number | string
+  following_count?: number | string
+  followers?: number | string
+  following?: number | string
+}
+
+type SnapshotScrapeTargets = {
+  profile: boolean
+  tweets: boolean
+  replies: boolean
+  followers: boolean
+  following: boolean
 }
 
 interface BackupData {
   profile?: BackupProfile
   stats?: Record<string, number | string>
   tweets?: unknown[]
+  replies?: unknown[]
   followers?: unknown[]
   following?: unknown[]
   dms?: unknown[]
   direct_messages?: unknown[]
+  scrape?: {
+    targets?: Partial<SnapshotScrapeTargets>
+  }
 }
 
 interface BackupRecord {
@@ -105,6 +124,38 @@ function isGifUrl(url?: string | null) {
   return /\.gif($|\?)/i.test(url)
 }
 
+function isTcoUrl(url?: string | null) {
+  if (!url) return false
+  return /^https?:\/\/t\.co\//i.test(url)
+}
+
+function isLikelyVideoUrl(url?: string | null) {
+  if (!url) return false
+  return /\.(mp4|webm|mov|m3u8)($|\?)/i.test(url)
+}
+
+function deriveGifVideoUrl(url?: string | null) {
+  if (!url) return null
+  const match = url.match(/^https?:\/\/pbs\.twimg\.com\/tweet_video_thumb\/([^/?.]+)(?:\.[^/?]+)?/i)
+  if (!match?.[1]) return null
+  return `https://video.twimg.com/tweet_video/${match[1]}.mp4`
+}
+
+function stripMediaAttachmentLinks(text: string, mediaShortUrls: string[]) {
+  if (!text) return ''
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return mediaShortUrls
+    .reduce((acc, shortUrl) => {
+      if (!shortUrl) return acc
+      const pattern = new RegExp(`(^|\\s)${escapeRegExp(shortUrl)}(?=\\s|$)`, 'g')
+      return acc.replace(pattern, '$1')
+    }, text)
+    .replace(/\bhttps?:\/\/t\.co\/[A-Za-z0-9]+\b/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function extractUsernameFromUrl(url?: string) {
   if (!url) return ''
   const m = url.match(/^https?:\/\/(?:twitter\.com|x\.com)\/([A-Za-z0-9_]+)\/?(?:\?.*)?$/)
@@ -115,6 +166,54 @@ function extractUserIdFromIntentUrl(url?: string) {
   if (!url) return ''
   const m = url.match(/[?&]user_id=(\d+)/)
   return m?.[1] || ''
+}
+
+function parseSnapshotTargets(value: unknown): SnapshotScrapeTargets | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = value as Record<string, unknown>
+  const keys: Array<keyof SnapshotScrapeTargets> = ['profile', 'tweets', 'replies', 'followers', 'following']
+  const hasAnyKey = keys.some((key) => key in source)
+  if (!hasAnyKey) return null
+
+  return {
+    profile: Boolean(source.profile),
+    tweets: Boolean(source.tweets),
+    replies: Boolean(source.replies),
+    followers: Boolean(source.followers),
+    following: Boolean(source.following),
+  }
+}
+
+function getTweetDedupeKey(item: unknown): string | null {
+  if (!item || typeof item !== 'object') return null
+  const tweet = item as Record<string, unknown>
+  if (typeof tweet.id === 'string' && tweet.id.trim().length > 0) return tweet.id
+  if (typeof tweet.id === 'number') return String(tweet.id)
+  if (typeof tweet.id_str === 'string' && tweet.id_str.trim().length > 0) return tweet.id_str
+
+  const createdAt = typeof tweet.created_at === 'string' ? tweet.created_at : ''
+  const text = typeof tweet.text === 'string' ? tweet.text : ''
+  const url = typeof tweet.tweet_url === 'string' ? tweet.tweet_url : ''
+  const composite = `${createdAt}|${text}|${url}`.trim()
+  return composite.length > 0 ? composite : null
+}
+
+function dedupeTweetItems(items: unknown[]): unknown[] {
+  const seen = new Set<string>()
+  const deduped: unknown[] = []
+
+  for (const item of items) {
+    const key = getTweetDedupeKey(item)
+    if (!key) {
+      deduped.push(item)
+      continue
+    }
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(item)
+  }
+
+  return deduped
 }
 
 export function BackupViewer({ backup }: BackupViewerProps) {
@@ -132,7 +231,10 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const [peopleViewOpen, setPeopleViewOpen] = useState(false)
   const [activePeopleTab, setActivePeopleTab] = useState<PeopleTab>('following')
   const profile = backup.data?.profile
-  const tweetList = useMemo(() => (Array.isArray(backup.data?.tweets) ? backup.data.tweets : []), [backup.data?.tweets])
+  const tweetList = useMemo(
+    () => dedupeTweetItems(Array.isArray(backup.data?.tweets) ? backup.data.tweets : []),
+    [backup.data?.tweets],
+  )
 
   const firstTweetWithAvatar = useMemo(
     () =>
@@ -235,8 +337,21 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     return fallback
   }
 
+  const optionalNumberValue = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string') {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    return null
+  }
+
   const stats = backup.stats || backup.data?.stats || {}
-  const tweets = useMemo(() => (Array.isArray(backup.data?.tweets) ? backup.data.tweets : []), [backup.data?.tweets])
+  const tweets = tweetList
+  const replies = useMemo(
+    () => dedupeTweetItems(Array.isArray(backup.data?.replies) ? backup.data.replies : []),
+    [backup.data?.replies],
+  )
   const followers = useMemo(() => (Array.isArray(backup.data?.followers) ? backup.data.followers : []), [backup.data?.followers])
   const following = useMemo(() => (Array.isArray(backup.data?.following) ? backup.data.following : []), [backup.data?.following])
   const dms = useMemo(() => backup.data?.dms || backup.data?.direct_messages || [], [backup.data?.dms, backup.data?.direct_messages])
@@ -246,36 +361,79 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const username = backup.data?.profile?.username || 'unknown'
   const profileBio = backup.data?.profile?.description || 'Archived profile from Social Backup.'
 
+  const createdAt = backup.uploaded_at || backup.created_at
+  const isArchiveBackup =
+    backup.backup_type === 'full_archive' ||
+    backup.source === 'archive' ||
+    backup.backup_source === 'archive_upload' ||
+    Boolean(backup.archive_file_path)
+  const scrapeTargets = parseSnapshotTargets(backup.data?.scrape?.targets)
+  const hasSnapshotTargetConfig = !isArchiveBackup && !!scrapeTargets
+
+  const postsIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.tweets) : true
+  const repliesIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.replies) : true
+  const followersIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.followers) : true
+  const followingIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.following) : true
+  const mediaIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.tweets || scrapeTargets?.replies) : true
+  const chatsIncluded = isArchiveBackup
+
+  const profileFollowersCount =
+    optionalNumberValue(profile?.followersCount) ??
+    optionalNumberValue(profile?.followers_count) ??
+    optionalNumberValue(profile?.followers)
+  const profileFollowingCount =
+    optionalNumberValue(profile?.followingCount) ??
+    optionalNumberValue(profile?.following_count) ??
+    optionalNumberValue(profile?.following)
+
   const tweetCount = numberValue(stats.tweets, tweets.length)
   const mediaCount = numberValue(stats.media_files)
   const dmCount = numberValue(stats.dms, dms.length)
-  const followersCount = numberValue(stats.followers, followers.length)
-  const followingCount = numberValue(stats.following, following.length)
-  const createdAt = backup.uploaded_at || backup.created_at
+  const followersListCount = numberValue(stats.followers, followers.length)
+  const followingListCount = numberValue(stats.following, following.length)
+  const followersRetrievedCount = followers.length
+  const followingRetrievedCount = following.length
+  const followersCount = followersIncluded
+    ? Math.max(followersListCount, profileFollowersCount || 0)
+    : profileFollowersCount
+  const followingCount = followingIncluded
+    ? Math.max(followingListCount, profileFollowingCount || 0)
+    : profileFollowingCount
+  const missingFollowersCount =
+    followersIncluded && followersCount !== null
+      ? Math.max(0, followersCount - followersRetrievedCount)
+      : 0
+  const missingFollowingCount =
+    followingIncluded && followingCount !== null
+      ? Math.max(0, followingCount - followingRetrievedCount)
+      : 0
 
   const methodLabel = useMemo(() => {
-    const isArchive =
-      backup.backup_type === 'full_archive' ||
-      backup.source === 'archive' ||
-      backup.backup_source === 'archive_upload' ||
-      backup.archive_file_path
-
-    if (isArchive) return `Archive Backup @${username}`
+    if (isArchiveBackup) return `Archive Backup @${username}`
     return `Snapshot @${username}`
-  }, [backup, username])
+  }, [isArchiveBackup, username])
 
   const postItems = tweets
-  const replyItems = tweets.filter((tweet) => {
-    const t = tweet as Record<string, unknown>
-    return Boolean(t.in_reply_to_status_id || t.in_reply_to_user_id || t.in_reply_to_screen_name)
-  })
+  const replyItems =
+    replies.length > 0
+      ? replies
+      : tweets.filter((tweet) => {
+          const t = tweet as Record<string, unknown>
+          return Boolean(t.in_reply_to_status_id || t.in_reply_to_user_id || t.in_reply_to_screen_name)
+        })
+  const timelineMediaSource = useMemo(
+    () => (replies.length > 0 ? [...tweets, ...replies] : tweets),
+    [replies, tweets],
+  )
+  const replyCount = numberValue(stats.replies, replyItems.length)
+  const formatCount = (value: number | null) => (value === null ? 'N/A' : value.toLocaleString())
 
   const profileMediaItems = useMemo(() => {
     const items: ProfileMediaItem[] = []
     const seen = new Set<string>()
 
-    for (let i = 0; i < tweets.length; i += 1) {
-      const tweet = tweets[i] as Record<string, unknown>
+    for (let i = 0; i < timelineMediaSource.length; i += 1) {
+      const tweet = timelineMediaSource[i] as Record<string, unknown>
       const media =
         (tweet.media as Record<string, unknown>[] | undefined) ||
         ((tweet.extended_entities as Record<string, unknown> | undefined)?.media as Record<string, unknown>[] | undefined) ||
@@ -293,14 +451,23 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         const type: ProfileMediaItem['type'] =
           rawType === 'video' || rawType === 'animated_gif' ? (rawType as ProfileMediaItem['type']) : 'photo'
 
-        const fallbackImageUrlRaw =
-          (mediaItem.media_url_https as string | undefined) || (mediaItem.media_url as string | undefined) || undefined
+        const mediaUrlHttpsRaw = mediaItem.media_url_https as string | undefined
+        const mediaUrlRawValue = mediaItem.media_url as string | undefined
+        const fallbackImageUrlRaw = mediaUrlHttpsRaw || mediaUrlRawValue
         const fallbackImageUrl = fallbackImageUrlRaw ? decodeMediaUrl(fallbackImageUrlRaw) : undefined
 
+        const normalizedMediaUrl = mediaUrlRawValue ? decodeMediaUrl(mediaUrlRawValue) : undefined
+        const normalizedMediaUrlHttps = mediaUrlHttpsRaw ? decodeMediaUrl(mediaUrlHttpsRaw) : undefined
+        const normalizedShortUrl = typeof mediaItem.url === 'string' ? decodeMediaUrl(mediaItem.url) : undefined
+        const derivedGifVideo = type === 'animated_gif' ? deriveGifVideoUrl(normalizedMediaUrlHttps || normalizedMediaUrl) : null
+
         let mediaUrlRaw =
-          (mediaItem.media_url_https as string | undefined) ||
-          (mediaItem.media_url as string | undefined) ||
-          (mediaItem.url as string | undefined) ||
+          (type === 'photo'
+            ? normalizedMediaUrlHttps || normalizedMediaUrl
+            : (isLikelyVideoUrl(normalizedMediaUrl) ? normalizedMediaUrl : null) ||
+              (isLikelyVideoUrl(normalizedMediaUrlHttps) ? normalizedMediaUrlHttps : null) ||
+              derivedGifVideo ||
+              (!isTcoUrl(normalizedShortUrl) ? normalizedShortUrl : null)) ||
           ''
 
         let variantUrls: string[] | undefined
@@ -330,12 +497,28 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
         const mediaUrl = mediaUrlRaw ? decodeMediaUrl(mediaUrlRaw) : ''
 
-        const text =
+        const rawTweetText =
           (tweet.full_text as string | undefined) ||
           (tweet.text as string | undefined) ||
           (((tweet.tweet as Record<string, unknown> | undefined)?.full_text as string | undefined) ||
             ((tweet.tweet as Record<string, unknown> | undefined)?.text as string | undefined)) ||
           ''
+        const text = stripMediaAttachmentLinks(rawTweetText, [
+          normalizedShortUrl || '',
+          typeof mediaItem.url === 'string' ? mediaItem.url : '',
+        ])
+        const tweetId =
+          (tweet.id as string | undefined) ||
+          (tweet.id_str as string | undefined) ||
+          ((tweet.tweet as Record<string, unknown> | undefined)?.id_str as string | undefined) ||
+          ((tweet.tweet as Record<string, unknown> | undefined)?.id as string | undefined)
+        const authorUsername =
+          ((tweet.author as Record<string, unknown> | undefined)?.username as string | undefined) ||
+          ((tweet.user as Record<string, unknown> | undefined)?.screen_name as string | undefined) ||
+          username
+        const tweetUrl =
+          (tweet.tweet_url as string | undefined) ||
+          (tweetId && authorUsername ? `https://x.com/${authorUsername}/status/${tweetId}` : undefined)
 
         if (!mediaUrl || seen.has(mediaUrl)) return
         seen.add(mediaUrl)
@@ -345,6 +528,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
           fallbackImageUrl,
           variantUrls,
           type,
+          tweetUrl,
           tweetText: text,
           createdAt: (tweet.created_at as string | undefined) || ((tweet.tweet as Record<string, unknown> | undefined)?.created_at as string | undefined),
           likes: numberValue(tweet.favorite_count, 0),
@@ -356,7 +540,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     }
 
     return items
-  }, [tweets])
+  }, [timelineMediaSource, username])
 
   const tabs = [
     { id: 'posts' as Tab, label: 'Posts' },
@@ -367,6 +551,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const followersList = followers
   const followingList = following
   const currentPeopleList = activePeopleTab === 'followers' ? followersList : followingList
+  const activePeopleTabIncluded = activePeopleTab === 'followers' ? followersIncluded : followingIncluded
 
   const normalizedDmList = useMemo(() => {
     if (Array.isArray(dms)) return dms
@@ -646,13 +831,18 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                       type="text"
                       value={chatSearch}
                       onChange={(e) => setChatSearch(e.target.value)}
-                      placeholder="Search"
-                      className="w-full rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white outline-none placeholder:text-gray-500"
+                      placeholder={chatsIncluded ? 'Search' : 'Not available for this snapshot'}
+                      disabled={!chatsIncluded}
+                      className="w-full rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white outline-none placeholder:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
                     />
                   </div>
 
                   <div className="overflow-y-auto">
-                    {filteredDmConversations.length > 0 ? (
+                    {!chatsIncluded ? (
+                      <div className="p-6 text-center text-gray-400">
+                        Direct messages are not included in snapshots.
+                      </div>
+                    ) : filteredDmConversations.length > 0 ? (
                       filteredDmConversations.map((conversation) => {
                         const lastMessage = conversation.messages[conversation.messages.length - 1]
                         return (
@@ -689,7 +879,11 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 </aside>
 
                 <section className="flex min-h-0 flex-col">
-                  {selectedConversation ? (
+                  {!chatsIncluded ? (
+                    <div className="flex h-full items-center justify-center px-6 text-center text-gray-400">
+                      This snapshot does not include chats.
+                    </div>
+                  ) : selectedConversation ? (
                     <>
                       <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
                         <a
@@ -749,7 +943,11 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 </button>
                 <div>
                   <p className="text-base font-bold sm:text-lg">{displayName}</p>
-                  <p className="text-xs text-gray-400">{tweetCount.toLocaleString()} posts in backup</p>
+                  <p className="text-xs text-gray-400">
+                    {postsIncluded
+                      ? `${tweetCount.toLocaleString()} posts in backup`
+                      : 'Posts were not included in this snapshot'}
+                  </p>
                 </div>
               </div>
             </header>
@@ -783,14 +981,14 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                   onClick={() => openPeople('following')}
                   className="transition hover:text-white"
                 >
-                  <strong className="font-semibold text-white">{followingCount.toLocaleString()}</strong> Following
+                  <strong className="font-semibold text-white">{formatCount(followingCount)}</strong> Following
                 </button>
                 <button
                   type="button"
                   onClick={() => openPeople('followers')}
                   className="transition hover:text-white"
                 >
-                  <strong className="font-semibold text-white">{followersCount.toLocaleString()}</strong> Followers
+                  <strong className="font-semibold text-white">{formatCount(followersCount)}</strong> Followers
                 </button>
               </div>
               <div className="mt-2 text-sm text-gray-400">Captured {formatDate(createdAt)}</div>
@@ -822,11 +1020,13 @@ export function BackupViewer({ backup }: BackupViewerProps) {
             <section>
               {activeTab === 'posts' && (
                 <div className="divide-y divide-white/10">
-                  {postItems.length > 0 ? (
+                  {!postsIncluded ? (
+                    <div className="p-10 text-center text-gray-400">Posts were not included in this snapshot.</div>
+                  ) : postItems.length > 0 ? (
                     postItems.map((tweet, index: number) => (
                       <TweetCard
                         key={(tweet as { id?: string })?.id || index}
-                        tweet={tweet}
+                        tweet={tweet as Parameters<typeof TweetCard>[0]['tweet']}
                         ownerProfileImageUrl={profileImageUrl}
                         ownerUsername={username}
                         ownerDisplayName={displayName}
@@ -840,50 +1040,69 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
               {activeTab === 'media' && (
                 <div className="border-t border-white/10">
-                  {profileMediaItems.length > 0 ? (
+                  {!mediaIncluded ? (
+                    <div className="p-10 text-center text-gray-400">
+                      Media was not included in this snapshot because posts/replies were not included.
+                    </div>
+                  ) : profileMediaItems.length > 0 ? (
                     <div className="mx-auto max-w-[680px] py-1">
                       <div className="grid grid-cols-3 gap-px">
                       {profileMediaItems.map((media, index) => (
-                        <button
-                          key={media.id}
-                          type="button"
-                          onClick={() => setSelectedMediaIndex(index)}
-                          className="relative aspect-square bg-black text-left"
-                        >
-                          {media.type === 'photo' ? (
-                            <img src={media.url} alt="Tweet media" className="h-full w-full object-cover" loading="lazy" />
-                          ) : (
-                            <>
-                              <video
-                                src={media.url}
-                                className="h-full w-full object-cover"
-                                muted
-                                playsInline
-                                loop
-                                autoPlay
-                                onError={(e) => {
-                                  e.currentTarget.style.display = 'none'
-                                  const fallback = e.currentTarget.nextElementSibling as HTMLImageElement | null
-                                  if (fallback) fallback.style.display = 'block'
-                                }}
-                              />
-                              {media.fallbackImageUrl ? (
-                                <img
-                                  src={media.fallbackImageUrl}
-                                  alt="Tweet media"
-                                  className="hidden h-full w-full object-cover"
-                                  loading="lazy"
+                        <div key={media.id} className="relative aspect-square bg-black">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedMediaIndex(index)}
+                            className="h-full w-full text-left"
+                          >
+                            {media.type === 'photo' ? (
+                              <img src={media.url} alt="Tweet media" className="h-full w-full object-cover" loading="lazy" />
+                            ) : (
+                              <>
+                                <video
+                                  src={media.url}
+                                  className="h-full w-full object-cover"
+                                  poster={media.fallbackImageUrl || undefined}
+                                  controls
+                                  muted
+                                  playsInline
+                                  loop
+                                  autoPlay
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none'
+                                    const fallback = e.currentTarget.nextElementSibling as HTMLImageElement | null
+                                    if (fallback) fallback.style.display = 'block'
+                                  }}
                                 />
-                              ) : null}
-                            </>
-                          )}
+                                {media.fallbackImageUrl ? (
+                                  <img
+                                    src={media.fallbackImageUrl}
+                                    alt="Tweet media"
+                                    className="hidden h-full w-full object-cover"
+                                    loading="lazy"
+                                  />
+                                ) : null}
+                              </>
+                            )}
 
-                          {media.type === 'animated_gif' && (
-                            <div className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold text-white">
-                              GIF
-                            </div>
-                          )}
-                        </button>
+                            {media.type === 'animated_gif' && (
+                              <div className="pointer-events-none absolute bottom-2 left-2 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold text-white">
+                                GIF
+                              </div>
+                            )}
+                          </button>
+
+                          {media.tweetUrl ? (
+                            <a
+                              href={media.tweetUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="absolute right-2 top-2 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white hover:bg-black/90"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              View post
+                            </a>
+                          ) : null}
+                        </div>
                       ))}
                       </div>
                     </div>
@@ -895,11 +1114,13 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
               {activeTab === 'replies' && (
                 <div className="divide-y divide-white/10">
-                  {replyItems.length > 0 ? (
+                  {!repliesIncluded ? (
+                    <div className="p-10 text-center text-gray-400">Replies were not included in this snapshot.</div>
+                  ) : replyItems.length > 0 ? (
                     replyItems.map((tweet, index: number) => (
                       <TweetCard
                         key={(tweet as { id?: string })?.id || index}
-                        tweet={tweet}
+                        tweet={tweet as Parameters<typeof TweetCard>[0]['tweet']}
                         ownerProfileImageUrl={profileImageUrl}
                         ownerUsername={username}
                         ownerDisplayName={displayName}
@@ -927,23 +1148,27 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-gray-400">Posts</span>
-                    <span className="font-medium text-white">{tweetCount.toLocaleString()}</span>
+                    <span className="font-medium text-white">{postsIncluded ? tweetCount.toLocaleString() : 'Not included'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-400">Replies</span>
+                    <span className="font-medium text-white">{repliesIncluded ? replyCount.toLocaleString() : 'Not included'}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-gray-400">Media</span>
-                    <span className="font-medium text-white">{mediaCount.toLocaleString()}</span>
+                    <span className="font-medium text-white">{mediaIncluded ? mediaCount.toLocaleString() : 'Not included'}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400">DMs</span>
-                    <span className="font-medium text-white">{dmCount.toLocaleString()}</span>
+                    <span className="text-gray-400">Chats</span>
+                    <span className="font-medium text-white">{chatsIncluded ? dmCount.toLocaleString() : 'Not included'}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-gray-400">Followers</span>
-                    <span className="font-medium text-white">{followersCount.toLocaleString()}</span>
+                    <span className="font-medium text-white">{followersIncluded ? formatCount(followersCount) : 'Not included'}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-gray-400">Following</span>
-                    <span className="font-medium text-white">{followingCount.toLocaleString()}</span>
+                    <span className="font-medium text-white">{followingIncluded ? formatCount(followingCount) : 'Not included'}</span>
                   </div>
                 </div>
               </div>
@@ -985,7 +1210,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 </svg>
               </button>
 
-              {selectedMediaIndex > 0 && (
+              {selectedMediaIndex !== null && selectedMediaIndex > 0 && (
                 <button
                   type="button"
                   onClick={() => setSelectedMediaIndex((prev) => (prev === null ? prev : Math.max(prev - 1, 0)))}
@@ -998,7 +1223,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 </button>
               )}
 
-              {selectedMediaIndex < profileMediaItems.length - 1 && (
+              {selectedMediaIndex !== null && selectedMediaIndex < profileMediaItems.length - 1 && (
                 <button
                   type="button"
                   onClick={() =>
@@ -1017,14 +1242,19 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 <img src={selectedMedia.url} alt="Selected media" className="max-h-full max-w-full object-contain" />
               ) : selectedMedia.type === 'animated_gif' && isGifUrl(selectedMediaUrl || selectedMedia.url) ? (
                 <img src={selectedMediaUrl || selectedMedia.url} alt="Selected GIF" className="max-h-full max-w-full object-contain" />
+              ) : selectedMedia.type === 'animated_gif' &&
+                !isLikelyVideoUrl(selectedMediaUrl || selectedMedia.url) &&
+                selectedMedia.fallbackImageUrl ? (
+                <img src={selectedMedia.fallbackImageUrl} alt="Selected GIF" className="max-h-full max-w-full object-contain" />
               ) : selectedMedia.type === 'animated_gif' && (selectedMediaVideoError || !selectedMediaUrl) && selectedMedia.fallbackImageUrl ? (
                 <img src={selectedMedia.fallbackImageUrl} alt="Selected GIF" className="max-h-full max-w-full object-contain" />
               ) : (
                 <video
                   key={selectedMediaUrl || selectedMedia.url}
                   src={selectedMediaUrl || selectedMedia.url}
+                  poster={selectedMedia.fallbackImageUrl || undefined}
                   className="max-h-full max-w-full object-contain"
-                  controls={selectedMedia.type !== 'animated_gif'}
+                  controls
                   autoPlay
                   playsInline
                   loop
@@ -1063,6 +1293,17 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                   <p className="whitespace-pre-wrap text-[1.08rem] leading-8 text-white">{selectedMedia.tweetText}</p>
                 ) : (
                   <p className="text-gray-400">Media from backup snapshot.</p>
+                )}
+
+                {selectedMedia.tweetUrl && (
+                  <a
+                    href={selectedMedia.tweetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-4 inline-flex text-sm font-medium text-sky-400 hover:underline"
+                  >
+                    View original post
+                  </a>
                 )}
 
                 <p className="mt-5 border-b border-white/10 pb-4 text-sm text-gray-400">{formatDate(selectedMedia.createdAt)}</p>
@@ -1122,7 +1363,23 @@ export function BackupViewer({ backup }: BackupViewerProps) {
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              {currentPeopleList.length > 0 ? (
+              {activePeopleTabIncluded && activePeopleTab === 'followers' && missingFollowersCount > 0 && (
+                <div className="border-b border-white/10 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200">
+                  Showing {followersRetrievedCount.toLocaleString()} of {followersCount?.toLocaleString()} followers. Some accounts were unavailable from the source API.
+                </div>
+              )}
+              {activePeopleTabIncluded && activePeopleTab === 'following' && missingFollowingCount > 0 && (
+                <div className="border-b border-white/10 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200">
+                  Showing {followingRetrievedCount.toLocaleString()} of {followingCount?.toLocaleString()} following. Some accounts were unavailable from the source API.
+                </div>
+              )}
+              {!activePeopleTabIncluded ? (
+                <div className="p-8 text-center text-lg text-gray-400">
+                  {activePeopleTab === 'following'
+                    ? 'Following list was not included in this snapshot.'
+                    : 'Followers list was not included in this snapshot.'}
+                </div>
+              ) : currentPeopleList.length > 0 ? (
                 currentPeopleList.map((person, index) => {
                   const p = personDisplay(person)
                   const actionLabel = activePeopleTab === 'following' ? 'Following' : 'Follow'

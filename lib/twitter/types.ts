@@ -1,9 +1,24 @@
 // Shared types for all Twitter providers
 
+export type TwitterScrapeTarget = 'profile' | 'tweets' | 'replies' | 'followers' | 'following'
+
+export interface TwitterScrapeTargets {
+  profile: boolean
+  tweets: boolean
+  replies: boolean
+  followers: boolean
+  following: boolean
+}
+
+export interface TwitterScrapeOptions {
+  targets: TwitterScrapeTargets
+}
+
 export interface TweetMedia {
   url: string
   type: 'photo' | 'video' | 'animated_gif'
   media_url?: string  // Direct URL to media file
+  media_url_https?: string // Optional preview image URL (if available)
 }
 
 export interface Tweet {
@@ -13,6 +28,11 @@ export interface Tweet {
   retweet_count?: number
   favorite_count?: number
   reply_count?: number
+  type?: string
+  in_reply_to_status_id?: string | null
+  in_reply_to_user_id?: string | null
+  in_reply_to_screen_name?: string | null
+  tweet_url?: string
   author?: {
     username: string
     name: string
@@ -49,6 +69,8 @@ export interface TwitterScrapeCost {
   tweets_count: number
   breakdown?: {
     tweets?: number
+    replies?: number
+    profile?: number
     followers?: number
     following?: number
   }
@@ -56,6 +78,7 @@ export interface TwitterScrapeCost {
 
 export interface TwitterScrapeResult {
   tweets: Tweet[]
+  replies: Tweet[]
   followers: Follower[]
   following: Following[]
   cost: TwitterScrapeCost
@@ -68,5 +91,8 @@ export interface TwitterScrapeResult {
     profileImageUrl?: string
     coverImageUrl?: string
     displayName?: string
+    profileFollowersCount?: number
+    profileFollowingCount?: number
+    selected_targets: TwitterScrapeTargets
   }
 }

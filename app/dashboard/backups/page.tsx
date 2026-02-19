@@ -3,9 +3,10 @@
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
+import { FileArchive, Globe } from 'lucide-react'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
 import { createClient } from '@/lib/supabase/client'
-import { isArchiveBackup } from '@/lib/platforms/backup'
+import { formatBackupMethodLabel, isArchiveBackup } from '@/lib/platforms/backup'
 
 type BackupRecord = {
   id: string
@@ -16,7 +17,13 @@ type BackupRecord = {
   uploaded_at?: string
   created_at?: string
   file_size?: number
-  data?: Record<string, unknown>
+  data?: {
+    profile?: {
+      username?: string
+    }
+    uploaded_file_size?: number
+    [key: string]: unknown
+  }
   stats?: {
     tweets?: number
     media_files?: number
@@ -27,13 +34,9 @@ type BackupRecord = {
   }
 }
 
-function backupLabel(backup: BackupRecord) {
-  return isArchiveBackup(backup) ? 'Archive Backup' : 'Snapshot Backup'
-}
-
 function formatDate(dateString?: string) {
   if (!dateString) return 'Unknown date'
-  return new Date(dateString).toLocaleDateString('en-US', {
+  return new Date(dateString).toLocaleString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -125,6 +128,22 @@ export default function BackupsPage() {
     } catch (error) {
       console.error('Error deleting backup:', error)
       alert('Failed to delete backup. Please try again.')
+    }
+  }
+
+  const downloadBackup = async (backupId: string) => {
+    try {
+      const response = await fetch(`/api/platforms/twitter/download-archive?backupId=${encodeURIComponent(backupId)}`)
+      const data = await response.json()
+
+      if (!response.ok || !data.success || !data.downloadUrl) {
+        throw new Error(data.error || 'This backup does not have a downloadable archive.')
+      }
+
+      window.location.href = data.downloadUrl
+    } catch (error) {
+      console.error('Download backup error:', error)
+      alert(error instanceof Error ? error.message : 'Failed to download backup.')
     }
   }
 
@@ -276,40 +295,57 @@ export default function BackupsPage() {
               ) : (
                 <div className="space-y-3">
                   {filteredAndSortedBackups.map((backup) => (
-                    <article key={backup.id} className="rounded-2xl border border-white/10 bg-[#0b0b0b] p-4 sm:p-5">
-                      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <p className="text-lg font-semibold text-white">{backup.backup_name || backupLabel(backup)}</p>
-                          <p className="mt-1 text-sm text-gray-400">Captured {formatDate(backup.uploaded_at || backup.created_at)}</p>
-                          <p className="mt-1 text-sm text-gray-500">{formatSize(resolveBackupSize(backup))}</p>
+                    <article
+                      key={backup.id}
+                      className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-[#171717] p-4 transition hover:border-white/20 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div
+                        className="flex min-w-0 cursor-pointer items-center gap-4"
+                        onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
+                      >
+                        <div
+                          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+                            isArchiveBackup(backup)
+                              ? 'bg-indigo-500/25 text-indigo-300'
+                              : 'bg-pink-500/25 text-pink-300'
+                          }`}
+                        >
+                          {isArchiveBackup(backup) ? <FileArchive size={20} /> : <Globe size={20} />}
                         </div>
-
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
-                            className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-200"
-                          >
-                            View
-                          </button>
-                          <button
-                            onClick={() => deleteBackup(backup.id, backupLabel(backup))}
-                            className="rounded-full border border-red-500/40 bg-red-500/15 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-500/25"
-                          >
-                            Delete
-                          </button>
+                        <div className="min-w-0">
+                          <p className="truncate text-[0.96rem] leading-tight font-semibold text-white">
+                            {backup.backup_name || formatBackupMethodLabel(backup)}
+                          </p>
+                          <p className="text-[0.9rem] text-gray-300">{formatDate(backup.uploaded_at || backup.created_at)}</p>
                         </div>
                       </div>
 
-                      {backup.stats && (
-                        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                          <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm text-gray-300">Posts <span className="ml-1 font-semibold text-white">{backup.stats.tweets?.toLocaleString() || 0}</span></div>
-                          <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm text-gray-300">Media <span className="ml-1 font-semibold text-white">{backup.stats.media_files?.toLocaleString() || 0}</span></div>
-                          <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm text-gray-300">Followers <span className="ml-1 font-semibold text-white">{backup.stats.followers?.toLocaleString() || 0}</span></div>
-                          <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm text-gray-300">Following <span className="ml-1 font-semibold text-white">{backup.stats.following?.toLocaleString() || 0}</span></div>
-                          <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm text-gray-300">Likes <span className="ml-1 font-semibold text-white">{backup.stats.likes?.toLocaleString() || 0}</span></div>
-                          <div className="rounded-xl border border-white/10 bg-black px-3 py-2 text-sm text-gray-300">DMs <span className="ml-1 font-semibold text-white">{backup.stats.dms?.toLocaleString() || 0}</span></div>
+                      <div className="flex items-center gap-2">
+                        <div className="mr-2 text-right">
+                          <p className="font-mono tabular-nums text-[0.9rem] font-medium leading-none text-gray-200">
+                            {isArchiveBackup(backup) ? formatSize(resolveBackupSize(backup)) : 'Snapshot'}
+                          </p>
                         </div>
-                      )}
+                        <button
+                          onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
+                          className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-200"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => downloadBackup(backup.id)}
+                          disabled={!isArchiveBackup(backup)}
+                          className="rounded-full border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/20 dark:text-white dark:hover:bg-white/10"
+                        >
+                          Download
+                        </button>
+                        <button
+                          onClick={() => deleteBackup(backup.id, formatBackupMethodLabel(backup))}
+                          className="rounded-full border border-red-500/40 bg-red-500/15 px-4 py-2 text-sm font-semibold text-red-300 hover:bg-red-500/25"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </article>
                   ))}
                 </div>

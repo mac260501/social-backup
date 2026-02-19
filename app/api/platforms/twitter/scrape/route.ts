@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getTwitterProvider } from '@/lib/twitter/twitter-service'
-import type { Tweet } from '@/lib/twitter/types'
+import type { Tweet, TwitterScrapeTargets } from '@/lib/twitter/types'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
@@ -10,6 +10,71 @@ import {
 
 const supabase = createAdminClient()
 const TWITTER_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/
+const DEFAULT_SCRAPE_TARGETS: TwitterScrapeTargets = {
+  profile: true,
+  tweets: true,
+  replies: true,
+  followers: true,
+  following: true,
+}
+
+const OPTIONAL_MEDIA_FILE_COLUMNS = new Set([
+  'file_name',
+  'file_size',
+  'mime_type',
+  'media_type',
+  'tweet_id',
+])
+
+function parseMissingColumnName(error: { code?: string; message?: string } | null | undefined): string | null {
+  if (!error || error.code !== 'PGRST204' || typeof error.message !== 'string') return null
+  const match = error.message.match(/'([^']+)' column of 'media_files'/)
+  return match?.[1] || null
+}
+
+async function insertMediaFileRecord(payload: Record<string, unknown>) {
+  const nextPayload = { ...payload }
+  const maxRetries = OPTIONAL_MEDIA_FILE_COLUMNS.size
+  let attempt = 0
+
+  while (attempt <= maxRetries) {
+    const { error } = await supabase.from('media_files').insert(nextPayload)
+    if (!error) return null
+
+    const missingColumn = parseMissingColumnName(error)
+    if (!missingColumn || !OPTIONAL_MEDIA_FILE_COLUMNS.has(missingColumn)) {
+      return error
+    }
+
+    if (!(missingColumn in nextPayload)) {
+      return error
+    }
+
+    delete nextPayload[missingColumn]
+    attempt += 1
+  }
+
+  return new Error('Failed to insert media_files record after removing optional columns.')
+}
+
+function parseScrapeTargets(value: unknown): TwitterScrapeTargets | null {
+  if (value === undefined || value === null) return { ...DEFAULT_SCRAPE_TARGETS }
+  if (typeof value !== 'object' || Array.isArray(value)) return null
+
+  const source = value as Record<string, unknown>
+  const read = (key: keyof TwitterScrapeTargets) => {
+    if (source[key] === undefined) return DEFAULT_SCRAPE_TARGETS[key]
+    return Boolean(source[key])
+  }
+
+  return {
+    profile: read('profile'),
+    tweets: read('tweets'),
+    replies: read('replies'),
+    followers: read('followers'),
+    following: read('following'),
+  }
+}
 
 /**
  * Download and store profile + cover photos for a scraped backup.
@@ -57,7 +122,7 @@ async function processScrapedProfileMedia(
         .maybeSingle()
 
       if (!existing) {
-        await supabase.from('media_files').insert({
+        const insertError = await insertMediaFileRecord({
           user_id: userId,
           backup_id: backupId,
           file_path: storagePath,
@@ -66,6 +131,9 @@ async function processScrapedProfileMedia(
           mime_type: contentType,
           media_type: 'profile_media',
         })
+        if (insertError) {
+          console.error(`[Profile Media] DB insert error for ${filename}:`, insertError)
+        }
       }
 
       console.log(`[Profile Media] Uploaded ${filename}`)
@@ -194,9 +262,7 @@ async function processScrapedMedia(userId: string, backupId: string, tweetsWithM
           .maybeSingle()
 
         if (!existing) {
-          const { error: insertError } = await supabase
-            .from('media_files')
-            .insert(metadataRecord)
+          const insertError = await insertMediaFileRecord(metadataRecord)
 
           if (insertError) {
             console.error(`[Scraped Media] DB insert error for ${filename}:`, insertError)
@@ -231,7 +297,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { username, maxTweets } = body
+    const { username, maxTweets, targets } = body
 
     if (!username) {
       return NextResponse.json({ success: false, error: 'Username is required' }, { status: 400 })
@@ -243,30 +309,55 @@ export async function POST(request: Request) {
       }, { status: 400 })
     }
 
-    const parsedTweetLimit = parseRequestedTweetCount(maxTweets)
-    if (parsedTweetLimit === null) {
+    const parsedTargets = parseScrapeTargets(targets)
+    if (!parsedTargets) {
       return NextResponse.json({
         success: false,
-        error: 'Invalid maxTweets value. It must be an integer.',
+        error: 'Invalid scrape targets. Use booleans for profile, tweets, replies, followers, and following.',
       }, { status: 400 })
     }
-    if (parsedTweetLimit < TWITTER_SCRAPE_LIMITS.minTweets) {
+
+    if (!Object.values(parsedTargets).some(Boolean)) {
       return NextResponse.json({
         success: false,
-        error: `maxTweets must be at least ${TWITTER_SCRAPE_LIMITS.minTweets}.`,
-      }, { status: 400 })
-    }
-    if (parsedTweetLimit > TWITTER_SCRAPE_LIMITS.maxTweets) {
-      return NextResponse.json({
-        success: false,
-        error: `maxTweets exceeds limit (${TWITTER_SCRAPE_LIMITS.maxTweets}).`,
+        error: 'Select at least one type of data to scrape.',
       }, { status: 400 })
     }
 
     const userUuid = user.id
-    const tweetsToScrape = parsedTweetLimit
+    const needsTimelineScrape = parsedTargets.tweets || parsedTargets.replies
+    let tweetsToScrape = TWITTER_SCRAPE_LIMITS.defaultTweets
 
-    console.log(`[Scrape API] Starting scrape for @${username}, max tweets: ${tweetsToScrape}`)
+    if (needsTimelineScrape) {
+      const parsedTweetLimit = parseRequestedTweetCount(maxTweets)
+      if (parsedTweetLimit === null) {
+        return NextResponse.json({
+          success: false,
+          error: 'Invalid maxTweets value. It must be an integer.',
+        }, { status: 400 })
+      }
+      if (parsedTweetLimit < TWITTER_SCRAPE_LIMITS.minTweets) {
+        return NextResponse.json({
+          success: false,
+          error: `maxTweets must be at least ${TWITTER_SCRAPE_LIMITS.minTweets}.`,
+        }, { status: 400 })
+      }
+      if (parsedTweetLimit > TWITTER_SCRAPE_LIMITS.maxTweets) {
+        return NextResponse.json({
+          success: false,
+          error: `maxTweets exceeds limit (${TWITTER_SCRAPE_LIMITS.maxTweets}).`,
+        }, { status: 400 })
+      }
+      tweetsToScrape = parsedTweetLimit
+    } else if (parsedTargets.profile) {
+      // Profile-only scrape should stay minimal and cheap.
+      tweetsToScrape = 1
+    }
+
+    console.log(`[Scrape API] Starting scrape for @${username}`, {
+      maxTweets: tweetsToScrape,
+      targets: parsedTargets,
+    })
 
     // Get the configured Twitter provider (Apify by default)
     const twitter = getTwitterProvider()
@@ -279,24 +370,36 @@ export async function POST(request: Request) {
       }, { status: 500 })
     }
 
-    // Scrape all data
-    const result = await twitter.scrapeAll(username, tweetsToScrape)
+    // Scrape selected data
+    const result = await twitter.scrapeAll(username, tweetsToScrape, { targets: parsedTargets })
 
-    // Count media files from tweets
-    const tweetsWithMedia = result.tweets.filter(t => t.media && t.media.length > 0)
-    const tweetMediaCount = tweetsWithMedia.reduce((sum, t) => sum + (t.media?.length || 0), 0)
-    const profileMediaCount = (result.metadata.profileImageUrl ? 1 : 0) + (result.metadata.coverImageUrl ? 1 : 0)
+    const timelineItems = [...result.tweets, ...result.replies]
+    const timelineItemsWithMedia = timelineItems.filter((t) => t.media && t.media.length > 0)
+    const tweetMediaCount = timelineItemsWithMedia.reduce((sum, t) => sum + (t.media?.length || 0), 0)
+    const scrapedFollowersCount = result.followers.length
+    const scrapedFollowingCount = result.following.length
+    const profileFollowersCount = result.metadata.profileFollowersCount || 0
+    const profileFollowingCount = result.metadata.profileFollowingCount || 0
+    const followersDisplayCount = Math.max(scrapedFollowersCount, profileFollowersCount)
+    const followingDisplayCount = Math.max(scrapedFollowingCount, profileFollowingCount)
+    const profileMediaCount = parsedTargets.profile
+      ? (result.metadata.profileImageUrl ? 1 : 0) + (result.metadata.coverImageUrl ? 1 : 0)
+      : 0
     const totalMediaCount = tweetMediaCount + profileMediaCount
 
     console.log(`[Scrape API] Scrape completed:`, {
       tweets: result.tweets.length,
-      tweetsWithMedia: tweetsWithMedia.length,
+      replies: result.replies.length,
+      timelineItemsWithMedia: timelineItemsWithMedia.length,
       totalMedia: totalMediaCount,
       tweetMedia: tweetMediaCount,
       profileMedia: profileMediaCount,
-      followers: result.followers.length,
-      following: result.following.length,
+      followers: scrapedFollowersCount,
+      following: scrapedFollowingCount,
+      followersDisplayCount,
+      followingDisplayCount,
       cost: result.cost.total_cost,
+      targets: parsedTargets,
     })
 
     // Save to Supabase
@@ -306,6 +409,7 @@ export async function POST(request: Request) {
       source: 'scrape',
       data: {
         tweets: result.tweets,
+        replies: result.replies,
         followers: result.followers,
         following: result.following,
         likes: [], // Scraping doesn't get likes
@@ -315,11 +419,14 @@ export async function POST(request: Request) {
           displayName: result.metadata.displayName,
           profileImageUrl: result.metadata.profileImageUrl,
           coverImageUrl: result.metadata.coverImageUrl,
+          followersCount: result.metadata.profileFollowersCount,
+          followingCount: result.metadata.profileFollowingCount,
         },
         stats: {
           tweets: result.tweets.length,
-          followers: result.followers.length,
-          following: result.following.length,
+          replies: result.replies.length,
+          followers: followersDisplayCount,
+          following: followingDisplayCount,
           likes: 0,
           dms: 0,
           media_files: totalMediaCount,
@@ -328,6 +435,7 @@ export async function POST(request: Request) {
           provider: result.cost.provider,
           total_cost: result.cost.total_cost,
           scraped_at: result.metadata.scraped_at,
+          targets: parsedTargets,
         },
       },
     }
@@ -346,21 +454,23 @@ export async function POST(request: Request) {
     console.log('[Scrape API] Backup saved successfully:', insertedBackup.id)
 
     // Download and store profile + cover photos (in background)
-    processScrapedProfileMedia(
-      userUuid,
-      insertedBackup.id,
-      result.metadata.profileImageUrl,
-      result.metadata.coverImageUrl,
-    ).catch(err => {
-      console.error('[Scrape API] Error processing profile media:', err)
-    })
+    if (parsedTargets.profile) {
+      processScrapedProfileMedia(
+        userUuid,
+        insertedBackup.id,
+        result.metadata.profileImageUrl,
+        result.metadata.coverImageUrl,
+      ).catch(err => {
+        console.error('[Scrape API] Error processing profile media:', err)
+      })
+    }
 
-    // Download and store media files from scraped tweets (in background)
-    if (totalMediaCount > 0) {
-      console.log(`[Scrape API] Processing ${totalMediaCount} media files from scraped tweets...`)
+    // Download and store media files from scraped timeline (tweets + replies) in background
+    if (tweetMediaCount > 0) {
+      console.log(`[Scrape API] Processing ${tweetMediaCount} media files from scraped timeline...`)
 
       // Process media in the background - don't await to speed up response
-      processScrapedMedia(userUuid, insertedBackup.id, tweetsWithMedia).catch(err => {
+      processScrapedMedia(userUuid, insertedBackup.id, timelineItemsWithMedia).catch(err => {
         console.error('[Scrape API] Error processing scraped media:', err)
       })
     }
@@ -370,12 +480,16 @@ export async function POST(request: Request) {
       message: 'Scrape completed successfully!',
       data: {
         tweets: result.tweets.length,
-        followers: result.followers.length,
-        following: result.following.length,
+        replies: result.replies.length,
+        followers: followersDisplayCount,
+        following: followingDisplayCount,
+        followers_scraped: scrapedFollowersCount,
+        following_scraped: scrapedFollowingCount,
         cost: result.cost.total_cost,
         provider: result.cost.provider,
         backup_id: insertedBackup.id,
         media_files: totalMediaCount,
+        targets: parsedTargets,
       },
     })
 

@@ -5,10 +5,21 @@ import { TweetText } from './TweetText'
 type TweetMediaItem = {
   type?: 'photo' | 'video' | 'animated_gif' | string
   media_url?: string
+  media_url_https?: string
   url?: string
+  video_info?: {
+    variants?: Array<{
+      url?: string
+      content_type?: string
+      bitrate?: number
+    }>
+  }
 }
 
 type TweetData = {
+  id?: string
+  id_str?: string
+  tweet_url?: string
   author?: {
     username?: string
     name?: string
@@ -117,8 +128,8 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
   const username = tweet.author?.username || tweet.user?.screen_name || ownerUsername || 'unknown'
   const displayName = tweet.author?.name || tweet.user?.name || ownerDisplayName || username
   const profileImageUrl = tweet.author?.profileImageUrl || tweet.user?.profile_image_url_https || tweet.user?.profile_image_url || ownerProfileImageUrl || null
-  const text = tweet.full_text || tweet.text || ''
-  const isRetweet = tweet.retweeted || text.startsWith('RT @')
+  const rawText = tweet.full_text || tweet.text || ''
+  const isRetweet = tweet.retweeted || rawText.startsWith('RT @')
   const isReply = tweet.in_reply_to_status_id || tweet.in_reply_to_user_id
 
   // Extract media from tweet (supports multiple Twitter data formats)
@@ -134,6 +145,45 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
   }
 
   const media = getMediaFromTweet()
+  const tweetId = tweet.id || tweet.id_str || ''
+
+  const normalizeUrl = (value?: string) => {
+    if (!value) return null
+    return value.replace(/&amp;/g, '&').trim()
+  }
+
+  const isTcoUrl = (value?: string | null) => Boolean(value && /^https?:\/\/t\.co\//i.test(value))
+  const isVideoUrl = (value?: string | null) => Boolean(value && /\.(mp4|webm|mov)(\?|$)/i.test(value))
+  const deriveGifVideoFromThumb = (value?: string | null) => {
+    if (!value) return null
+    const match = value.match(/^https?:\/\/pbs\.twimg\.com\/tweet_video_thumb\/([^/?.]+)(?:\.[^/?]+)?/i)
+    if (!match?.[1]) return null
+    return `https://video.twimg.com/tweet_video/${match[1]}.mp4`
+  }
+
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+  const attachmentShortUrls = new Set(
+    media
+      .map((mediaItem) => normalizeUrl(mediaItem.url))
+      .filter((url): url is string => Boolean(url)),
+  )
+
+  const cleanedText =
+    media.length > 0 && rawText
+      ? Array.from(attachmentShortUrls).reduce((acc, shortUrl) => {
+          const pattern = new RegExp(`(^|\\s)${escapeRegExp(shortUrl)}(?=\\s|$)`, 'g')
+          return acc.replace(pattern, '$1')
+        }, rawText)
+          .replace(/\bhttps?:\/\/t\.co\/[A-Za-z0-9]+\b/g, '')
+          .replace(/[ \t]{2,}/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim()
+      : rawText
+
+  const text = media.length > 0 ? cleanedText : rawText
+  const inferredTweetUrl = tweetId ? `https://x.com/${username}/status/${tweetId}` : null
+  const tweetUrl = normalizeUrl(tweet.tweet_url) || inferredTweetUrl
 
   return (
     <div className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
@@ -171,7 +221,7 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
               </span>
             </div>
             <div className="text-gray-500 dark:text-gray-400 text-sm whitespace-nowrap">
-              {formatDate(tweet.created_at)}
+              {formatDate(tweet.created_at || '')}
             </div>
           </div>
 
@@ -194,9 +244,11 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
           )}
 
           {/* Tweet Text */}
-          <div className="text-gray-900 dark:text-white mb-3">
-            <TweetText text={text} />
-          </div>
+          {text ? (
+            <div className="mb-3 text-gray-900 dark:text-white">
+              <TweetText text={text} />
+            </div>
+          ) : null}
 
           {/* Media Attachments */}
           {media && media.length > 0 && (
@@ -207,36 +259,74 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
               'grid-cols-2'
             }`}>
               {media.slice(0, 4).map((mediaItem, index: number) => (
-                <div
-                  key={index}
-                  className={`relative ${
-                    media.length === 3 && index === 0 ? 'col-span-2' : ''
-                  }`}
-                >
-                  {mediaItem.type === 'photo' ? (
-                    <img
-                      src={mediaItem.media_url || mediaItem.url}
-                      alt="Tweet media"
-                      className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
-                      onError={(e) => {
-                        // Hide broken images
-                        e.currentTarget.style.display = 'none'
-                      }}
-                    />
-                  ) : mediaItem.type === 'video' || mediaItem.type === 'animated_gif' ? (
-                    <div className="relative">
-                      <video
-                        src={mediaItem.media_url || mediaItem.url}
-                        controls
-                        className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
-                        onError={(e) => {
-                          // Hide broken videos
-                          e.currentTarget.style.display = 'none'
-                        }}
-                      />
+                (() => {
+                  const type = mediaItem.type
+                  const previewUrl = normalizeUrl(mediaItem.media_url_https) || normalizeUrl(mediaItem.media_url)
+                  const mediaUrl = normalizeUrl(mediaItem.media_url)
+                  const directUrl = normalizeUrl(mediaItem.url)
+
+                  const variants = Array.isArray(mediaItem.video_info?.variants) ? mediaItem.video_info?.variants || [] : []
+                  const bestVariant = [...variants]
+                    .filter((variant) => typeof variant.url === 'string' && `${variant.content_type || ''}`.toLowerCase().includes('mp4'))
+                    .sort((a, b) => Number(b.bitrate || 0) - Number(a.bitrate || 0))[0]
+                  const variantUrl = normalizeUrl(bestVariant?.url)
+                  const derivedGifUrl = deriveGifVideoFromThumb(previewUrl)
+
+                  const mediaSource =
+                    type === 'photo'
+                      ? (previewUrl || (!isTcoUrl(mediaUrl) ? mediaUrl : null) || (!isTcoUrl(directUrl) ? directUrl : null))
+                      : (variantUrl || (isVideoUrl(mediaUrl) ? mediaUrl : null) || derivedGifUrl || (isVideoUrl(previewUrl) ? previewUrl : null))
+
+                  return (
+                    <div
+                      key={index}
+                      className={`relative ${
+                        media.length === 3 && index === 0 ? 'col-span-2' : ''
+                      }`}
+                    >
+                      {type === 'photo' && mediaSource ? (
+                        <img
+                          src={mediaSource}
+                          alt="Tweet media"
+                          className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none'
+                          }}
+                        />
+                      ) : type === 'video' || type === 'animated_gif' ? (
+                        <div className="relative">
+                          {mediaSource ? (
+                            <video
+                              src={mediaSource}
+                              poster={previewUrl || undefined}
+                              controls
+                              autoPlay={type === 'animated_gif'}
+                              loop={type === 'animated_gif'}
+                              muted={type === 'animated_gif'}
+                              playsInline
+                              className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none'
+                                const fallback = e.currentTarget.nextElementSibling as HTMLImageElement | null
+                                if (fallback) fallback.style.display = 'block'
+                              }}
+                            />
+                          ) : null}
+                          {previewUrl ? (
+                            <img
+                              src={previewUrl}
+                              alt="Tweet media"
+                              className={`${mediaSource ? 'hidden' : 'block'} w-full h-auto max-h-96 rounded-lg border border-gray-200 object-cover dark:border-gray-700`}
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none'
+                              }}
+                            />
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                  ) : null}
-                </div>
+                  )
+                })()
               ))}
             </div>
           )}
@@ -273,9 +363,21 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
               )}
             </div>
 
+            {tweetUrl && (
+              <a
+                href={tweetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-sky-400 hover:text-sky-300 hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                View original
+              </a>
+            )}
+
             {/* Timestamp */}
             <div className="ml-auto text-sm">
-              {formatTime(tweet.created_at)}
+              {formatTime(tweet.created_at || '')}
             </div>
           </div>
         </div>

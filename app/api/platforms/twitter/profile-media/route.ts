@@ -19,6 +19,13 @@ function getStringAtPath(source: unknown, path: string[]): string | null {
   return typeof current === 'string' && current.trim().length > 0 ? current.trim() : null
 }
 
+function parseSnapshotProfileIncluded(value: unknown): boolean | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const targets = value as Record<string, unknown>
+  if (!('profile' in targets)) return null
+  return Boolean(targets.profile)
+}
+
 function parseStoragePathFromUrl(url: string): string | null {
   const clean = url.split('?')[0]
   const publicMarker = '/storage/v1/object/public/twitter-media/'
@@ -88,6 +95,7 @@ export async function GET(request: Request) {
     const profile = backup.data?.profile
     const storedProfileImageFilename = extractFilename(profile?.profileImageUrl)
     const storedCoverImageFilename = extractFilename(profile?.coverImageUrl)
+    const isProfileIncludedInSnapshot = parseSnapshotProfileIncluded(backup.data?.scrape?.targets)
 
     // Fetch media files for this backup. We avoid filtering on legacy columns
     // (e.g. media_type) because newer schemas may not include them.
@@ -165,8 +173,39 @@ export async function GET(request: Request) {
     let avatarFilePath = avatarFile?.file_path || null
     let headerFilePath = headerFile?.file_path || null
 
+    const hasExplicitProfileReference = Boolean(
+      storedProfileImageFilename ||
+      storedCoverImageFilename ||
+      profile?.profileImageUrl ||
+      profile?.profile_image_url_https ||
+      profile?.profile_image_url ||
+      profile?.coverImageUrl ||
+      profile?.bannerImageUrl ||
+      profile?.profile_banner_url
+    )
+
+    // Important guardrail:
+    // snapshots that did not include profile data should not inherit profile images
+    // from a previous backup via broad storage-folder fallback.
+    if (
+      isProfileIncludedInSnapshot === false &&
+      !hasExplicitProfileReference &&
+      candidateFiles.length === 0
+    ) {
+      return NextResponse.json({
+        success: true,
+        profileImageUrl: null,
+        coverImageUrl: null,
+      })
+    }
+
     // Fallback: if media_files matching is incomplete, inspect storage folders directly.
-    if (!avatarFilePath || !headerFilePath) {
+    const shouldUseStorageFolderFallback =
+      isProfileIncludedInSnapshot !== false &&
+      (!avatarFilePath || !headerFilePath) &&
+      (candidateFiles.length > 0 || hasExplicitProfileReference)
+
+    if (shouldUseStorageFolderFallback) {
       const backupOwnerId = typeof backup.user_id === 'string' ? backup.user_id : user.id
       const mediaFolders = [`${backupOwnerId}/profile_media`, `${backupOwnerId}/profiles_media`]
 
