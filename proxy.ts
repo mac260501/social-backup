@@ -1,6 +1,17 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+function isSafeRelativePath(path: string | null) {
+  return Boolean(path && path.startsWith('/') && !path.startsWith('//'))
+}
+
+function copyCookies(from: NextResponse, to: NextResponse) {
+  from.cookies.getAll().forEach(({ name, value, ...options }) => {
+    to.cookies.set(name, value, options)
+  })
+  return to
+}
+
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
@@ -33,6 +44,18 @@ export async function proxy(request: NextRequest) {
       },
     }
   )
+
+  const code = request.nextUrl.searchParams.get('code')
+  if (code && !pathname.startsWith('/api')) {
+    const requestedNext = request.nextUrl.searchParams.get('next')
+    const nextPath = isSafeRelativePath(requestedNext) ? requestedNext : '/dashboard'
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    const redirectUrl = error
+      ? new URL('/login?error=auth_failed', request.url)
+      : new URL(nextPath, request.url)
+    const redirectResponse = NextResponse.redirect(redirectUrl)
+    return copyCookies(supabaseResponse, redirectResponse)
+  }
 
   const {
     data: { user },
