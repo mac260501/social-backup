@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-function isSafeRelativePath(path: string | null) {
+function isSafeRelativePath(path: string | null): path is string {
   return Boolean(path && path.startsWith('/') && !path.startsWith('//'))
 }
 

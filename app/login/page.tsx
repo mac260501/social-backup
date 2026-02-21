@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SocialLogoRow } from '@/components/social-logos'
 
-function isSafeRelativePath(path: string | null) {
+function isSafeRelativePath(path: string | null): path is string {
   return Boolean(path && path.startsWith('/') && !path.startsWith('//'))
 }
 

@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-function isSafeRelativePath(path: string | null) {
+function isSafeRelativePath(path: string | null): path is string {
   return Boolean(path && path.startsWith('/') && !path.startsWith('//'))
 }
 
