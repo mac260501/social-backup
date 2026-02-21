@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { TweetCard } from '@/components/platforms/twitter/backup/TweetCard'
+import { formatPartialReasonLabel, getBackupPartialDetails, isArchiveBackup as isArchiveBackupRecord } from '@/lib/platforms/backup'
 
 interface BackupViewerProps {
   backup: BackupRecord
@@ -79,6 +80,11 @@ interface BackupData {
   direct_messages?: unknown[]
   scrape?: {
     targets?: Partial<SnapshotScrapeTargets>
+    is_partial?: boolean | string | number | null
+    partial_reason?: string | null
+    partial_reasons?: unknown
+    timeline_limit_hit?: boolean | string | number | null
+    social_graph_limit_hit?: boolean | string | number | null
   }
 }
 
@@ -362,11 +368,11 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const profileBio = backup.data?.profile?.description || 'Archived profile from Social Backup.'
 
   const createdAt = backup.uploaded_at || backup.created_at
-  const isArchiveBackup =
-    backup.backup_type === 'full_archive' ||
-    backup.source === 'archive' ||
-    backup.backup_source === 'archive_upload' ||
-    Boolean(backup.archive_file_path)
+  const isArchiveBackup = isArchiveBackupRecord(backup)
+  const partial = getBackupPartialDetails(backup)
+  const partialSummaryText = partial.reasons.length > 0
+    ? partial.reasons.map((reason) => formatPartialReasonLabel(reason)).join(' • ')
+    : 'This snapshot did not complete all requested data.'
   const scrapeTargets = parseSnapshotTargets(backup.data?.scrape?.targets)
   const hasSnapshotTargetConfig = !isArchiveBackup && !!scrapeTargets
 
@@ -427,6 +433,16 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   )
   const replyCount = numberValue(stats.replies, replyItems.length)
   const formatCount = (value: number | null) => (value === null ? 'N/A' : value.toLocaleString())
+  const summaryEntries: Array<{ label: string; value: string; valueClass?: string }> = [
+    { label: 'Backup type', value: methodLabel },
+    { label: 'Status', value: partial.isPartial ? 'Partial' : 'Complete', valueClass: partial.isPartial ? 'text-amber-200' : 'text-white' },
+    { label: 'Posts', value: postsIncluded ? tweetCount.toLocaleString() : 'Not included' },
+    { label: 'Replies', value: repliesIncluded ? replyCount.toLocaleString() : 'Not included' },
+    { label: 'Media', value: mediaIncluded ? mediaCount.toLocaleString() : 'Not included' },
+    { label: 'Chats', value: chatsIncluded ? dmCount.toLocaleString() : 'Not included' },
+    { label: 'Followers', value: followersIncluded ? formatCount(followersCount) : 'Not included' },
+    { label: 'Following', value: followingIncluded ? formatCount(followingCount) : 'Not included' },
+  ] as const
 
   const profileMediaItems = useMemo(() => {
     const items: ProfileMediaItem[] = []
@@ -787,7 +803,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
             <div className="sticky top-3 space-y-4 xl:top-5">
               <div className="flex items-center xl:justify-start">
                 <button
-                  onClick={() => router.push('/dashboard/backups')}
+                  onClick={() => router.push('/dashboard?tab=all-backups')}
                   className="rounded-full px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
                   title="Back to backups"
                 >
@@ -933,22 +949,32 @@ export function BackupViewer({ backup }: BackupViewerProps) {
             ) : (
             <>
             <header className="sticky top-0 z-20 border-b border-white/10 bg-black/95 px-4 py-2 backdrop-blur sm:px-5">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => router.push('/dashboard/backups')}
-                  className="rounded-full p-1.5 text-lg hover:bg-white/10 md:hidden"
-                  title="Back"
-                >
-                  ←
-                </button>
-                <div>
-                  <p className="text-base font-bold sm:text-lg">{displayName}</p>
-                  <p className="text-xs text-gray-400">
-                    {postsIncluded
-                      ? `${tweetCount.toLocaleString()} posts in backup`
-                      : 'Posts were not included in this snapshot'}
-                  </p>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-4">
+                  <button
+                    onClick={() => router.push('/dashboard?tab=all-backups')}
+                    className="rounded-full p-1.5 text-lg hover:bg-white/10 md:hidden"
+                    title="Back"
+                  >
+                    ←
+                  </button>
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-bold sm:text-lg">{displayName}</p>
+                    <p className="truncate text-xs text-gray-400">
+                      {postsIncluded
+                        ? `${tweetCount.toLocaleString()} posts in backup`
+                        : 'Posts were not included in this snapshot'}
+                    </p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('chat')}
+                  disabled={!chatsIncluded}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 md:hidden"
+                >
+                  Chats
+                </button>
               </div>
             </header>
 
@@ -991,7 +1017,44 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                   <strong className="font-semibold text-white">{formatCount(followersCount)}</strong> Followers
                 </button>
               </div>
+              {partial.isPartial && (
+                <div
+                  title={partialSummaryText}
+                  className="mt-2 inline-flex items-center rounded-full border border-amber-400/50 bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200"
+                >
+                  Partial snapshot
+                </div>
+              )}
               <div className="mt-2 text-sm text-gray-400">Captured {formatDate(createdAt)}</div>
+            </section>
+
+            <section className="space-y-4 border-b border-white/10 px-4 pb-4 xl:hidden sm:px-5">
+              <div className="rounded-2xl border border-white/10 bg-black p-5">
+                <h2 className="mb-3 text-[1rem] font-bold">Backup Summary</h2>
+                <div className="space-y-2.5 text-[0.9rem]">
+                  {summaryEntries.map((item) => (
+                    <div key={item.label} className="flex items-center justify-between gap-3">
+                      <span className="text-gray-400">{item.label}</span>
+                      <span className={`text-right font-medium ${item.valueClass || 'text-white'}`}>{item.value}</span>
+                    </div>
+                  ))}
+                  {partial.isPartial && (
+                    <div className="pt-1 text-xs text-amber-200/90">
+                      {partialSummaryText}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {backup.archive_file_path && (
+                <button
+                  onClick={handleDownloadArchive}
+                  disabled={isDownloading}
+                  className="w-full rounded-full bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-gray-200 disabled:opacity-60"
+                >
+                  {isDownloading ? 'Downloading archive...' : 'Download archive ZIP'}
+                </button>
+              )}
             </section>
 
             <div className="sticky top-[52px] z-10 border-y border-white/10 bg-black/95 backdrop-blur">
@@ -1142,34 +1205,17 @@ export function BackupViewer({ backup }: BackupViewerProps) {
               <div className="rounded-2xl border border-white/10 bg-black p-5">
                 <h2 className="mb-3 text-[1rem] font-bold">Backup Summary</h2>
                 <div className="space-y-2.5 text-[0.9rem]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Backup type</span>
-                    <span className="font-medium text-white">{methodLabel}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Posts</span>
-                    <span className="font-medium text-white">{postsIncluded ? tweetCount.toLocaleString() : 'Not included'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Replies</span>
-                    <span className="font-medium text-white">{repliesIncluded ? replyCount.toLocaleString() : 'Not included'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Media</span>
-                    <span className="font-medium text-white">{mediaIncluded ? mediaCount.toLocaleString() : 'Not included'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Chats</span>
-                    <span className="font-medium text-white">{chatsIncluded ? dmCount.toLocaleString() : 'Not included'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Followers</span>
-                    <span className="font-medium text-white">{followersIncluded ? formatCount(followersCount) : 'Not included'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Following</span>
-                    <span className="font-medium text-white">{followingIncluded ? formatCount(followingCount) : 'Not included'}</span>
-                  </div>
+                  {summaryEntries.map((item) => (
+                    <div key={item.label} className="flex items-center justify-between gap-3">
+                      <span className="text-gray-400">{item.label}</span>
+                      <span className={`text-right font-medium ${item.valueClass || 'text-white'}`}>{item.value}</span>
+                    </div>
+                  ))}
+                  {partial.isPartial && (
+                    <div className="pt-1 text-xs text-amber-200/90">
+                      {partialSummaryText}
+                    </div>
+                  )}
                 </div>
               </div>
 

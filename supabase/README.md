@@ -26,6 +26,38 @@ Before applying the migration, you can check what constraints/indexes currently 
 
 ## Migrations
 
+### 008_add_archive_wizard_profile_fields.sql
+
+Adds archive wizard tracking fields to `profiles`:
+- `archive_request_status`
+- `archive_requested_at`
+- `archive_reminder_count`
+- `archive_last_reminder_at`
+
+Apply this migration before using `/dashboard/archive-wizard` and reminder endpoints.
+
+---
+
+### 007_normalize_backups_media_schema.sql
+
+**Issue**: Different environments may have schema drift where:
+- `backups.created_at` is missing (only `uploaded_at` exists)
+- `media_files.media_type` is missing
+
+This causes API usage and storage summary queries to fail with `42703 column does not exist`.
+
+**Solution**: This migration:
+- Adds `backups.created_at` and `backups.uploaded_at` if missing
+- Backfills missing timestamp values from each other (or `now()`)
+- Sets defaults and applies `NOT NULL` when safe
+- Adds `media_files.media_type` if missing
+- Backfills `media_type` using file path / mime type heuristics
+- Adds helpful indexes used by current query patterns
+
+**When to apply**: Apply this after existing migrations. It is idempotent (`IF NOT EXISTS` + safe guards).
+
+---
+
 ### 001_fix_media_files_constraint.sql
 
 **Issue**: The `media_files` table had a unique constraint on `file_path` which prevented the same media file from being associated with multiple backups. This caused the following problems:

@@ -12,6 +12,25 @@ export interface TwitterScrapeTargets {
 
 export interface TwitterScrapeOptions {
   targets: TwitterScrapeTargets
+  socialGraphMaxItems?: number
+  onProgress?: (update: TwitterScrapeProgressUpdate) => Promise<void> | void
+  shouldCancel?: () => Promise<boolean> | boolean
+  apifyWebhook?: {
+    baseUrl: string
+    token?: string
+    jobId: string
+  }
+}
+
+export interface TwitterScrapeProgressUpdate {
+  phase: 'timeline' | 'followers' | 'following' | 'social_graph' | 'complete'
+  tweets_fetched: number
+  replies_fetched: number
+  followers_fetched: number
+  following_fetched: number
+  api_cost_usd: number
+  timeline_run_id?: string
+  social_graph_run_id?: string
 }
 
 export interface TweetMedia {
@@ -68,6 +87,8 @@ export interface TwitterScrapeCost {
   total_cost: number // in USD
   tweets_count: number
   breakdown?: {
+    profile_query?: number
+    timeline_extra_items?: number
     tweets?: number
     replies?: number
     profile?: number
@@ -85,7 +106,10 @@ export interface TwitterScrapeResult {
   metadata: {
     username: string
     scraped_at: string
-    is_partial: boolean // true if hit rate limits
+    is_partial: boolean
+    partial_reasons?: string[]
+    timeline_limit_hit?: boolean
+    social_graph_limit_hit?: boolean
     tweets_requested: number
     tweets_received: number
     profileImageUrl?: string

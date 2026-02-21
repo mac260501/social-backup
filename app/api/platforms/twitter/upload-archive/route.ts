@@ -1,11 +1,40 @@
-import { NextResponse } from 'next/server'
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import { NextResponse } from 'next/server'
 import yauzl from 'yauzl'
-import { createClient as createServerClient } from '@/lib/supabase/server'
+import {
+  createBackupJob,
+  findActiveBackupJobForUser,
+  isBackupJobCancellationRequested,
+  markBackupJobCompleted,
+  markBackupJobCleanup,
+  markBackupJobFailed,
+  markBackupJobProcessing,
+  markBackupJobProgress,
+  mergeBackupJobPayload,
+} from '@/lib/jobs/backup-jobs'
+import { isZipUpload, TWITTER_UPLOAD_LIMITS, USER_STORAGE_LIMITS } from '@/lib/platforms/twitter/limits'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { isZipUpload, TWITTER_UPLOAD_LIMITS } from '@/lib/platforms/twitter/limits'
+import { createClient as createServerClient } from '@/lib/supabase/server'
+import { deleteBackupAndStorageById } from '@/lib/backups/delete-backup-data'
+import { calculateUserStorageSummary, recalculateAndPersistBackupStorage } from '@/lib/storage/usage'
 
 const supabase = createAdminClient()
+
+class JobCancelledError extends Error {
+  constructor(message: string = 'Job cancelled by user') {
+    super(message)
+    this.name = 'JobCancelledError'
+  }
+}
+
+async function ensureArchiveJobNotCancelled(jobId: string) {
+  const cancelRequested = await isBackupJobCancellationRequested(supabase, jobId)
+  if (cancelRequested) {
+    throw new JobCancelledError()
+  }
+}
 
 function parseTwitterJSON(content: string) {
   const jsonMatch = content.match(/=\s*(\[[\s\S]*\])/)?.[1]
@@ -20,12 +49,24 @@ function parseTwitterJSON(content: string) {
   return []
 }
 
+type MediaMetadataRecord = {
+  user_id: string
+  backup_id: string
+  file_path: string
+  file_name: string
+  file_size: number
+  mime_type: string
+  media_type: string
+}
+
 // Helper to extract media files from ZIP
 async function extractMediaFiles(
   zipPath: string,
   userId: string,
-  backupId: string
-): Promise<{ mediaFiles: any[], uploadedCount: number }> {
+  backupId: string,
+  onProgress?: (processed: number, total: number) => Promise<void>,
+  ensureActive?: () => Promise<void>,
+): Promise<{ mediaFiles: MediaMetadataRecord[], uploadedCount: number }> {
   const mediaFolders = [
     'data/tweets_media',
     'data/direct_messages_media',
@@ -38,7 +79,7 @@ async function extractMediaFiles(
     'data/deleted_tweets_media',
   ]
 
-  const mediaFiles: any[] = []
+  const mediaFiles: MediaMetadataRecord[] = []
   let uploadedCount = 0
 
   // Open ZIP to get all entries
@@ -91,8 +132,11 @@ async function extractMediaFiles(
 
   console.log(`Found ${mediaEntries.length} media files to upload`)
 
+  let processedEntries = 0
+
   // Upload each media file
   for (const entry of mediaEntries) {
+    if (ensureActive) await ensureActive()
     try {
       // Extract file content
       const zipfile2: any = await new Promise((resolve, reject) => {
@@ -122,9 +166,9 @@ async function extractMediaFiles(
       zipfile2.close()
 
       // Determine media type (folder name)
-      const mediaType = entry.fileName.split('/')[1] // e.g., 'tweets_media'
-      const fileName = entry.fileName.split('/').pop() // e.g., 'image.jpg'
-      
+      const mediaType = entry.fileName.split('/')[1] || 'unknown_media' // e.g., 'tweets_media'
+      const fileName = entry.fileName.split('/').pop() || entry.fileName // e.g., 'image.jpg'
+
       // Storage path: {userId}/{mediaType}/{fileName}
       const storagePath = `${userId}/${mediaType}/${fileName}`
 
@@ -186,6 +230,7 @@ async function extractMediaFiles(
       if (existingForBackup) {
         console.log(`Media record for ${fileName} already exists for this backup, skipping insert`)
         mediaFiles.push(metadataRecord)
+        uploadedCount++
       } else {
         // Insert the record - with the updated schema (composite unique on backup_id + file_path),
         // the same file can be associated with multiple different backups
@@ -199,10 +244,9 @@ async function extractMediaFiles(
         } else {
           console.log(`Inserted media record for ${fileName}`)
           mediaFiles.push(metadataRecord)
+          uploadedCount++
         }
       }
-
-      uploadedCount++
 
       // Log progress every 10 files
       if (uploadedCount % 10 === 0) {
@@ -212,6 +256,15 @@ async function extractMediaFiles(
     } catch (error) {
       console.error(`Error processing media file ${entry.fileName}:`, error)
       // Continue with next file
+    } finally {
+      processedEntries += 1
+      if (
+        onProgress
+        && mediaEntries.length > 0
+        && (processedEntries === mediaEntries.length || processedEntries % 5 === 0)
+      ) {
+        await onProgress(processedEntries, mediaEntries.length)
+      }
     }
   }
 
@@ -224,7 +277,7 @@ async function extractMediaFiles(
 function updateMediaUrls(
   tweets: any[],
   directMessages: any[],
-  mediaFiles: any[]
+  mediaFiles: MediaMetadataRecord[]
 ): { tweets: any[], directMessages: any[] } {
   // Create filename -> storage path mapping
   const fileMap = new Map<string, string>()
@@ -332,59 +385,43 @@ function updateMediaUrls(
   return { tweets: updatedTweets, directMessages: updatedDMs }
 }
 
-export async function POST(request: Request) {
+async function processArchiveUploadJob(params: {
+  jobId: string
+  userId: string
+  username: string
+  inputStoragePath: string
+}) {
+  const { jobId, userId, username, inputStoragePath } = params
+
   let tmpPath = ''
+  let createdBackupId: string | null = null
 
   try {
-    const authClient = await createServerClient()
-    const {
-      data: { user },
-      error: authError
-    } = await authClient.auth.getUser()
+    await markBackupJobProcessing(supabase, jobId, 5, 'Downloading uploaded archive...')
+    await mergeBackupJobPayload(supabase, jobId, { lifecycle_state: 'processing' })
+    await ensureArchiveJobNotCancelled(jobId)
 
-    if (authError || !user) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    const { data: uploadedArchive, error: downloadError } = await supabase.storage
+      .from('twitter-media')
+      .download(inputStoragePath)
+
+    if (downloadError || !uploadedArchive) {
+      throw new Error(downloadError?.message || 'Failed to load uploaded archive payload')
     }
 
-    const formData = await request.formData()
-    const file = formData.get('file') as File
-    const username = (formData.get('username') as string) || user.email?.split('@')[0] || 'twitter-user'
-
-    if (!file) {
-      return NextResponse.json({ success: false, error: 'No file uploaded' }, { status: 400 })
-    }
-    if (!isZipUpload(file.name, file.type)) {
-      return NextResponse.json({
-        success: false,
-        error: 'Invalid upload type. Please upload a .zip Twitter archive file.',
-      }, { status: 400 })
-    }
-    if (file.size <= 0) {
-      return NextResponse.json({
-        success: false,
-        error: 'Uploaded file is empty.',
-      }, { status: 400 })
-    }
-    if (file.size > TWITTER_UPLOAD_LIMITS.maxArchiveBytes) {
-      return NextResponse.json({
-        success: false,
-        error: `Archive exceeds size limit (${TWITTER_UPLOAD_LIMITS.maxArchiveBytes} bytes).`,
-      }, { status: 413 })
-    }
-
-    console.log('Processing archive for:', username)
-
-    const userUuid = user.id
-    const bytes = await file.arrayBuffer()
+    const bytes = await uploadedArchive.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
     // Write buffer to temp file for yauzl
-    tmpPath = `/tmp/archive-${Date.now()}.zip`
+    tmpPath = `/tmp/archive-${jobId}.zip`
     fs.writeFileSync(tmpPath, buffer)
+
+    await markBackupJobProgress(supabase, jobId, 15, 'Extracting archive files...')
+    await ensureArchiveJobNotCancelled(jobId)
 
     // Extract files
     const files: { [key: string]: string } = {}
-    
+
     try {
       const zipfile: any = await new Promise((resolve, reject) => {
         yauzl.open(tmpPath, { lazyEntries: true, autoClose: false }, (err, zipfile) => {
@@ -408,6 +445,7 @@ export async function POST(request: Request) {
 
       // Now extract the files we need
       for (const fileName of ['data/account.js', 'data/tweets.js', 'data/tweet.js', 'data/follower.js', 'data/following.js', 'data/like.js', 'data/direct-messages.js']) {
+        await ensureArchiveJobNotCancelled(jobId)
         const entry = entries.find(e => e.fileName === fileName)
         if (entry) {
           const zipfile2: any = await new Promise((resolve, reject) => {
@@ -442,8 +480,15 @@ export async function POST(request: Request) {
       }
     } catch (error) {
       console.error('Error extracting ZIP:', error)
-      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
       throw new Error('Failed to extract archive')
+    }
+
+    await markBackupJobProgress(supabase, jobId, 30, 'Parsing archive metadata...')
+    await ensureArchiveJobNotCancelled(jobId)
+
+    const hasCoreArchiveFiles = Boolean(files['data/account.js']) || Boolean(files['data/tweets.js'] || files['data/tweet.js'])
+    if (!hasCoreArchiveFiles) {
+      throw new Error("This doesn't look like a Twitter archive. Upload the ZIP file downloaded from Twitter.")
     }
 
     const stats = { tweets: 0, followers: 0, following: 0, likes: 0, dms: 0 }
@@ -475,7 +520,6 @@ export async function POST(request: Request) {
           headerMediaUrl: account.headerMediaUrl,
           platformUserId: account.accountId,
         }
-        console.log('Account profile:', accountProfile)
       }
     }
 
@@ -579,7 +623,8 @@ export async function POST(request: Request) {
       stats.dms = directMessages.reduce((sum: number, dm: any) => sum + dm.message_count, 0)
     }
 
-    console.log('Stats:', stats)
+    await markBackupJobProgress(supabase, jobId, 45, 'Saving backup record...')
+    await ensureArchiveJobNotCancelled(jobId)
 
     const resolvedTwitterUsername = accountProfile.username || username
 
@@ -588,7 +633,7 @@ export async function POST(request: Request) {
           .from('social_profiles')
           .upsert(
             {
-              user_id: userUuid,
+              user_id: userId,
               platform: 'twitter',
               platform_username: resolvedTwitterUsername,
               platform_user_id: accountProfile.platformUserId || null,
@@ -609,30 +654,53 @@ export async function POST(request: Request) {
     const { data: backupData, error: backupError } = await supabase
       .from('backups')
       .insert({
-        user_id: userUuid,
+        user_id: userId,
         social_profile_id: socialProfile?.id || null,
         backup_type: 'full_archive',
         source: 'archive',
         data: { tweets, followers, following, likes, direct_messages: directMessages },
-    })
-    .select()
-    .single()
+      })
+      .select()
+      .single()
 
     if (backupError) {
       throw new Error(`Failed to create backup: ${backupError.message}`)
     }
 
     const backupId = backupData.id
+    createdBackupId = backupId
+    await mergeBackupJobPayload(supabase, jobId, {
+      partial_backup_id: backupId,
+    })
+    await ensureArchiveJobNotCancelled(jobId)
 
-    console.log('Backup created, now processing media files...')
+    await markBackupJobProgress(supabase, jobId, 55, 'Uploading archive media files...')
 
     // Extract and upload media files
-    const { mediaFiles, uploadedCount } = await extractMediaFiles(tmpPath, userUuid, backupId)
+    const { mediaFiles, uploadedCount } = await extractMediaFiles(
+      tmpPath,
+      userId,
+      backupId,
+      async (processed, total) => {
+        if (total <= 0) return
+        const ratio = processed / total
+        const progress = 55 + Math.round(ratio * 30)
+        await markBackupJobProgress(
+          supabase,
+          jobId,
+          Math.min(progress, 85),
+          `Uploading media files (${processed}/${total})...`,
+        )
+      },
+      async () => ensureArchiveJobNotCancelled(jobId),
+    )
 
     console.log(`Processed ${uploadedCount} media files (${mediaFiles.length} new records inserted)`)
 
+    await markBackupJobProgress(supabase, jobId, 88, 'Finalizing backup data...')
+    await ensureArchiveJobNotCancelled(jobId)
+
     // Update media URLs to point to Supabase Storage
-    console.log('Updating media URLs in backup data...')
     const { tweets: updatedTweets, directMessages: updatedDMs } = updateMediaUrls(
       tweets,
       directMessages,
@@ -688,12 +756,11 @@ export async function POST(request: Request) {
     // Update stats to include media count
     const updatedStats = {
       ...stats,
-      media_files: uploadedCount,
+      media_files: mediaFiles.length,
     }
 
     // Upload the original ZIP file to storage for future downloads
-    console.log('Uploading original archive ZIP to storage...')
-    const archiveStoragePath = `${userUuid}/archives/${backupId}.zip`
+    const archiveStoragePath = `${userId}/archives/${backupId}.zip`
     const { error: archiveUploadError } = await supabase.storage
       .from('twitter-media')
       .upload(archiveStoragePath, buffer, {
@@ -701,11 +768,40 @@ export async function POST(request: Request) {
         upsert: false,
       })
 
-    if (archiveUploadError && archiveUploadError.message !== 'The resource already exists') {
+    const archiveAlreadyExists = archiveUploadError?.message === 'The resource already exists'
+    if (archiveUploadError && !archiveAlreadyExists) {
       console.error('Failed to upload archive ZIP:', archiveUploadError)
       // Don't fail the whole upload, just log the error
-    } else {
-      console.log('Successfully uploaded archive ZIP')
+    }
+    const archiveStoredPath = archiveUploadError && !archiveAlreadyExists ? null : archiveStoragePath
+
+    if (archiveStoredPath) {
+      const { data: existingArchiveRecord } = await supabase
+        .from('media_files')
+        .select('id')
+        .eq('backup_id', backupId)
+        .eq('file_path', archiveStoredPath)
+        .maybeSingle()
+
+      if (!existingArchiveRecord) {
+        const archiveMetadataRecord: MediaMetadataRecord = {
+          user_id: userId,
+          backup_id: backupId,
+          file_path: archiveStoredPath,
+          file_name: `${backupId}.zip`,
+          file_size: buffer.length,
+          mime_type: 'application/zip',
+          media_type: 'archive_file',
+        }
+
+        const { error: archiveMediaInsertError } = await supabase
+          .from('media_files')
+          .insert(archiveMetadataRecord)
+
+        if (archiveMediaInsertError) {
+          console.error('Failed to insert archive media record:', archiveMediaInsertError)
+        }
+      }
     }
 
     // Update the backup record with normalized content for the current schema.
@@ -720,8 +816,8 @@ export async function POST(request: Request) {
           direct_messages: updatedDMs,
           profile: archiveProfile,
           stats: updatedStats,
-          archive_file_path: archiveUploadError ? null : archiveStoragePath,
-          uploaded_file_size: buffer.length,
+          archive_file_path: archiveStoredPath,
+          uploaded_file_size: archiveStoredPath ? buffer.length : null,
         },
       })
       .eq('id', backupId)
@@ -730,25 +826,164 @@ export async function POST(request: Request) {
       console.error('Failed to update backup:', updateError)
       // Don't fail the whole upload, just log the error
     } else {
-      console.log('Successfully updated backup with media URLs and archive path')
+      await recalculateAndPersistBackupStorage(supabase, backupId)
     }
 
-    // Clean up temp file
-    fs.unlinkSync(tmpPath)
-
-    return NextResponse.json({
-      success: true,
-      message: 'Archive processed!',
-      stats: updatedStats
+    await ensureArchiveJobNotCancelled(jobId)
+    await mergeBackupJobPayload(supabase, jobId, {
+      lifecycle_state: 'completed',
+      partial_backup_id: null,
     })
+    await markBackupJobCompleted(supabase, jobId, backupId, 'Archive backup completed successfully.')
   } catch (error) {
-    console.error('Error:', error)
-    
-    // Clean up temp file on error
+    if (error instanceof JobCancelledError) {
+      console.log(`[Archive Job] Cancellation requested for ${jobId}. Cleaning up...`)
+      await markBackupJobCleanup(supabase, jobId, 'Cancellation requested. Cleaning up partial data...')
+      if (createdBackupId) {
+        try {
+          await deleteBackupAndStorageById(supabase, {
+            backupId: createdBackupId,
+            expectedUserId: userId,
+          })
+        } catch (cleanupError) {
+          console.error(`[Archive Job] Cleanup failed for backup ${createdBackupId}:`, cleanupError)
+        }
+      }
+      await mergeBackupJobPayload(supabase, jobId, {
+        lifecycle_state: 'cancelled',
+        partial_backup_id: null,
+      })
+      await markBackupJobFailed(supabase, jobId, 'Cancelled by user', 'Cancelled')
+      return
+    }
+
+    console.error('[Archive Job] Error:', error)
+    await mergeBackupJobPayload(supabase, jobId, {
+      lifecycle_state: 'failed',
+    })
+    await markBackupJobFailed(
+      supabase,
+      jobId,
+      error instanceof Error ? error.message : 'Archive processing failed',
+    )
+  } finally {
+    // Clean up temp file
     if (tmpPath && fs.existsSync(tmpPath)) {
       fs.unlinkSync(tmpPath)
     }
-    
+
+    const { error: removeInputError } = await supabase.storage
+      .from('twitter-media')
+      .remove([inputStoragePath])
+
+    if (removeInputError) {
+      console.warn(`[Archive Job] Failed to clean up staged input ${inputStoragePath}:`, removeInputError)
+    }
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const authClient = await createServerClient()
+    const {
+      data: { user },
+      error: authError
+    } = await authClient.auth.getUser()
+
+    if (authError || !user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const activeJob = await findActiveBackupJobForUser(supabase, user.id)
+    if (activeJob) {
+      return NextResponse.json({
+        success: false,
+        error: 'A backup job is already in progress. Please wait for it to finish before starting another one.',
+        activeJob,
+      }, { status: 409 })
+    }
+
+    const formData = await request.formData()
+    const file = formData.get('file') as File
+    const username = (formData.get('username') as string) || user.email?.split('@')[0] || 'twitter-user'
+
+    if (!file) {
+      return NextResponse.json({ success: false, error: 'No file uploaded' }, { status: 400 })
+    }
+    if (!isZipUpload(file.name, file.type)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Invalid upload type. Please upload a .zip Twitter archive file.',
+      }, { status: 400 })
+    }
+    if (file.size <= 0) {
+      return NextResponse.json({
+        success: false,
+        error: 'Uploaded file is empty.',
+      }, { status: 400 })
+    }
+    if (file.size > TWITTER_UPLOAD_LIMITS.maxArchiveBytes) {
+      return NextResponse.json({
+        success: false,
+        error: `Archive exceeds size limit (${TWITTER_UPLOAD_LIMITS.maxArchiveBytes} bytes).`,
+      }, { status: 413 })
+    }
+
+    const storageSummary = await calculateUserStorageSummary(supabase, user.id)
+    const projectedTotalBytes = storageSummary.totalBytes + file.size
+    if (projectedTotalBytes > USER_STORAGE_LIMITS.maxTotalBytes) {
+      return NextResponse.json({
+        success: false,
+        error: `Storage limit exceeded. Current usage: ${storageSummary.totalBytes} bytes. Upload would raise usage to ${projectedTotalBytes} bytes, above the ${USER_STORAGE_LIMITS.maxTotalBytes} byte limit.`,
+      }, { status: 413 })
+    }
+
+    const job = await createBackupJob(supabase, {
+      userId: user.id,
+      jobType: 'archive_upload',
+      message: 'Archive uploaded. Waiting to process...',
+      payload: {
+        username,
+        upload_file_name: file.name,
+        upload_file_size: file.size,
+      },
+    })
+
+    const bytes = await file.arrayBuffer()
+    const buffer = Buffer.from(bytes)
+    const stagedInputPath = `${user.id}/job-inputs/${job.id}-${randomUUID()}.zip`
+
+    const { error: uploadError } = await supabase.storage
+      .from('twitter-media')
+      .upload(stagedInputPath, buffer, {
+        contentType: 'application/zip',
+        upsert: false,
+      })
+
+    if (uploadError) {
+      await markBackupJobFailed(supabase, job.id, `Failed to stage uploaded archive: ${uploadError.message}`)
+      throw new Error(`Failed to upload archive payload: ${uploadError.message}`)
+    }
+
+    await mergeBackupJobPayload(supabase, job.id, {
+      staged_input_path: stagedInputPath,
+      lifecycle_state: 'queued',
+    })
+
+    void processArchiveUploadJob({
+      jobId: job.id,
+      userId: user.id,
+      username,
+      inputStoragePath: stagedInputPath,
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: 'Archive uploaded. Your backup job is now processing in the background.',
+      job,
+    })
+  } catch (error) {
+    console.error('Upload enqueue error:', error)
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Failed' }, { status: 500 })
   }
 }

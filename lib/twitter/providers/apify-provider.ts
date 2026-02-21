@@ -6,9 +6,16 @@ import {
   Tweet,
   TweetMedia,
   TwitterScrapeOptions,
+  TwitterScrapeProgressUpdate,
   TwitterScrapeResult,
   TwitterScrapeTargets,
 } from '../types'
+import {
+  estimateApifySocialGraphCostUsd,
+  estimateApifyTimelineCostUsd,
+  estimateApifyTimelineExtraItemsCostUsd,
+  roundUsd,
+} from '../apify-pricing'
 
 type ProfileMetadata = {
   profileImageUrl?: string
@@ -29,6 +36,7 @@ type SocialGraphScrape = {
   followers: Follower[]
   following: Following[]
   profile: ProfileMetadata
+  totalItems: number
 }
 
 type SocialUser = {
@@ -39,13 +47,46 @@ type SocialUser = {
   profileImageUrl?: string
 }
 
-const MAX_USER_GRAPH_ITEMS = 1000
+type RunDatasetPollResult = {
+  items: Record<string, unknown>[]
+  finalStatus: string
+}
+
+class RunCancelledError extends Error {
+  constructor(message: string = 'Job cancelled by user') {
+    super(message)
+    this.name = 'RunCancelledError'
+  }
+}
+
 const DEFAULT_TARGETS: TwitterScrapeTargets = {
   profile: true,
   tweets: true,
   replies: true,
   followers: true,
   following: true,
+}
+
+const PROGRESS_UPDATE_ITEM_INTERVAL = 50
+const APIFY_TERMINAL_WEBHOOK_EVENTS = [
+  'ACTOR.RUN.SUCCEEDED',
+  'ACTOR.RUN.FAILED',
+  'ACTOR.RUN.TIMED_OUT',
+  'ACTOR.RUN.ABORTED',
+] as const
+
+type TimelineProgress = {
+  tweets: number
+  replies: number
+  totalItems: number
+  runId?: string
+}
+
+type SocialGraphProgress = {
+  followers: number
+  following: number
+  totalItems: number
+  runId?: string
 }
 
 /**
@@ -113,6 +154,9 @@ export class ApifyProvider implements TwitterProvider {
     }
 
     const targets = this.resolveTargets(options)
+    const onProgress = options?.onProgress
+    const shouldCancel = options?.shouldCancel
+    const apifyWebhook = options?.apifyWebhook
     const startTime = Date.now()
 
     console.log(`[Apify] Starting selective scrape for @${username}`, targets)
@@ -124,19 +168,66 @@ export class ApifyProvider implements TwitterProvider {
     let profile: ProfileMetadata = {}
     let timelineItemCount = 0
 
+    const emitProgress = async (update: TwitterScrapeProgressUpdate) => {
+      if (!onProgress) return
+      await onProgress(update)
+    }
+
     if (targets.profile || targets.tweets || targets.replies) {
-      const timeline = await this.scrapeTimeline(username, maxTweets)
+      const timeline = await this.scrapeTimeline(username, maxTweets, async (progress) => {
+        timelineItemCount = Math.max(timelineItemCount, progress.totalItems)
+        await emitProgress({
+          phase: 'timeline',
+          tweets_fetched: progress.tweets,
+          replies_fetched: progress.replies,
+          followers_fetched: 0,
+          following_fetched: 0,
+          api_cost_usd: estimateApifyTimelineCostUsd(progress.totalItems),
+          timeline_run_id: progress.runId,
+        })
+      }, shouldCancel, apifyWebhook)
       timelineItemCount = timeline.totalItems
       if (targets.tweets) tweets = timeline.tweets
       if (targets.replies) replies = timeline.replies
       if (targets.profile) profile = timeline.profile
+
+      await emitProgress({
+        phase: 'timeline',
+        tweets_fetched: tweets.length,
+        replies_fetched: replies.length,
+        followers_fetched: 0,
+        following_fetched: 0,
+        api_cost_usd: estimateApifyTimelineCostUsd(timelineItemCount),
+      })
     }
+
+    const socialGraphMaxItems =
+      typeof options?.socialGraphMaxItems === 'number' && Number.isFinite(options.socialGraphMaxItems)
+        ? Math.max(1, Math.floor(options.socialGraphMaxItems))
+        : undefined
+
+    let socialGraphItemCount = 0
 
     if (targets.followers || targets.following) {
       const graph = await this.scrapeSocialGraph(username, {
         followers: targets.followers,
         following: targets.following,
-      })
+      }, socialGraphMaxItems, async (progress) => {
+        socialGraphItemCount = Math.max(socialGraphItemCount, progress.totalItems)
+        const timelineCost = targets.profile || targets.tweets || targets.replies
+          ? estimateApifyTimelineCostUsd(timelineItemCount)
+          : 0
+        await emitProgress({
+          phase: targets.followers && targets.following ? 'social_graph' : targets.followers ? 'followers' : 'following',
+          tweets_fetched: tweets.length,
+          replies_fetched: replies.length,
+          followers_fetched: progress.followers,
+          following_fetched: progress.following,
+          api_cost_usd: roundUsd(timelineCost + estimateApifySocialGraphCostUsd(progress.totalItems)),
+          social_graph_run_id: progress.runId,
+        })
+      }, shouldCancel, apifyWebhook)
+      socialGraphItemCount = graph.totalItems
       followers = graph.followers
       following = graph.following
       // Even when "profile" isn't explicitly selected, user-scraper returns the owner row.
@@ -145,6 +236,18 @@ export class ApifyProvider implements TwitterProvider {
         ...graph.profile,
         ...profile,
       }
+
+      await emitProgress({
+        phase: targets.followers && targets.following ? 'social_graph' : targets.followers ? 'followers' : 'following',
+        tweets_fetched: tweets.length,
+        replies_fetched: replies.length,
+        followers_fetched: followers.length,
+        following_fetched: following.length,
+        api_cost_usd: roundUsd(
+          (targets.profile || targets.tweets || targets.replies ? estimateApifyTimelineCostUsd(timelineItemCount) : 0)
+          + estimateApifySocialGraphCostUsd(socialGraphItemCount),
+        ),
+      })
     }
 
     const firstAuthor = [...tweets, ...replies].find((item) => item.author?.name || item.author?.profileImageUrl)?.author
@@ -152,22 +255,50 @@ export class ApifyProvider implements TwitterProvider {
     const coverImageUrl = profile.coverImageUrl
     const displayName = profile.displayName || firstAuthor?.name || username
 
-    // Approximate cost model using returned item counts.
-    const tweetCost = (tweets.length / 1000) * 0.4
-    const replyCost = (replies.length / 1000) * 0.4
-    const followerCost = (followers.length / 1000) * 0.4
-    const followingCost = (following.length / 1000) * 0.4
-    const profileCost = targets.profile && !targets.tweets && !targets.replies ? (timelineItemCount / 1000) * 0.4 : 0
-    const totalCost = tweetCost + replyCost + followerCost + followingCost + profileCost
+    const timelineQueried = targets.profile || targets.tweets || targets.replies
+    const timelineCost = timelineQueried ? estimateApifyTimelineCostUsd(timelineItemCount) : 0
+    const timelineExtraItemsCost = timelineQueried ? estimateApifyTimelineExtraItemsCostUsd(timelineItemCount) : 0
+    const socialGraphCost = estimateApifySocialGraphCostUsd(socialGraphItemCount)
+    const totalCost = roundUsd(timelineCost + socialGraphCost)
 
     const timelineRequested = targets.tweets || targets.replies
     const timelineReturned = tweets.length + replies.length
+    const timelineDistributionDivisor = Math.max(1, timelineReturned)
+    const tweetWeight = tweets.length / timelineDistributionDivisor
+    const replyWeight = replies.length / timelineDistributionDivisor
+    const tweetCost = timelineExtraItemsCost * tweetWeight
+    const replyCost = timelineExtraItemsCost * replyWeight
+    const profileCost = timelineQueried ? timelineCost - (tweetCost + replyCost) : 0
+    const socialDistributionDivisor = Math.max(1, followers.length + following.length)
+    const followerWeight = followers.length / socialDistributionDivisor
+    const followingWeight = following.length / socialDistributionDivisor
+    const followerCost = socialGraphCost * followerWeight
+    const followingCost = socialGraphCost * followingWeight
+    const socialGraphCapHit = typeof socialGraphMaxItems === 'number' && socialGraphMaxItems > 0
+      ? socialGraphItemCount >= socialGraphMaxItems
+      : false
+    const timelineLimitHit = timelineRequested && maxTweets > 0
+      ? timelineItemCount >= maxTweets
+      : false
+    const partialReasons: string[] = []
+    if (timelineLimitHit) partialReasons.push('timeline_limit_reached')
+    if (socialGraphCapHit) partialReasons.push('social_graph_budget_cap_reached')
+
+    await emitProgress({
+      phase: 'complete',
+      tweets_fetched: tweets.length,
+      replies_fetched: replies.length,
+      followers_fetched: followers.length,
+      following_fetched: following.length,
+      api_cost_usd: totalCost,
+    })
 
     console.log('[Apify] Selective scrape complete', {
       tweets: tweets.length,
       replies: replies.length,
       followers: followers.length,
       following: following.length,
+      totalCost,
       elapsedMs: Date.now() - startTime,
     })
 
@@ -178,20 +309,25 @@ export class ApifyProvider implements TwitterProvider {
       following,
       cost: {
         provider: 'apify',
-        total_cost: parseFloat(totalCost.toFixed(2)),
+        total_cost: totalCost,
         tweets_count: timelineReturned,
         breakdown: {
-          tweets: parseFloat(tweetCost.toFixed(2)),
-          replies: parseFloat(replyCost.toFixed(2)),
-          profile: parseFloat(profileCost.toFixed(2)),
-          followers: parseFloat(followerCost.toFixed(2)),
-          following: parseFloat(followingCost.toFixed(2)),
+          profile_query: roundUsd(timelineQueried ? timelineCost - timelineExtraItemsCost : 0),
+          timeline_extra_items: roundUsd(timelineExtraItemsCost),
+          tweets: roundUsd(tweetCost),
+          replies: roundUsd(replyCost),
+          profile: roundUsd(profileCost),
+          followers: roundUsd(followerCost),
+          following: roundUsd(followingCost),
         },
       },
       metadata: {
         username,
         scraped_at: new Date().toISOString(),
-        is_partial: timelineRequested ? timelineReturned < maxTweets : false,
+        is_partial: partialReasons.length > 0,
+        partial_reasons: partialReasons,
+        timeline_limit_hit: timelineLimitHit,
+        social_graph_limit_hit: socialGraphCapHit,
         tweets_requested: timelineRequested ? maxTweets : 0,
         tweets_received: timelineReturned,
         profileImageUrl,
@@ -224,35 +360,95 @@ export class ApifyProvider implements TwitterProvider {
     }
   }
 
-  private async scrapeTimeline(username: string, maxItems: number): Promise<TimelineScrape> {
+  private async scrapeTimeline(
+    username: string,
+    maxItems: number,
+    onProgress?: (progress: TimelineProgress) => Promise<void>,
+    shouldCancel?: () => Promise<boolean> | boolean,
+    apifyWebhook?: TwitterScrapeOptions['apifyWebhook'],
+  ): Promise<TimelineScrape> {
     console.log(`[Apify] Scraping timeline/profile for @${username} (maxItems=${maxItems})`)
 
     try {
-      const run = await this.client.actor(this.profileActorId).call({
-        twitterHandles: [username],
-        maxItems: Math.max(1, maxItems),
-      })
+      const run = await this.client.actor(this.profileActorId).start(
+        {
+          twitterHandles: [username],
+          maxItems: Math.max(1, maxItems),
+        },
+        this.buildRunWebhooks(apifyWebhook, 'timeline'),
+      )
 
-      if (run.status === 'FAILED') {
-        throw new Error('Apify profile scraper run failed. Verify your Apify account plan and actor access.')
+      if (!run.id || !run.defaultDatasetId) {
+        throw new Error('Apify profile scraper did not return run metadata.')
+      }
+      if (onProgress) {
+        await onProgress({
+          tweets: 0,
+          replies: 0,
+          totalItems: 0,
+          runId: run.id,
+        })
       }
 
-      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
-      const normalizedItems = (items || []) as Record<string, unknown>[]
+      const normalizedItems: Record<string, unknown>[] = []
       const tweets: Tweet[] = []
       const replies: Tweet[] = []
       const seenTweetIds = new Set<string>()
+      let processedItems = 0
+      let nextEmitAt = PROGRESS_UPDATE_ITEM_INTERVAL
+      let hasInitialProgressEmission = false
 
-      normalizedItems.forEach((item) => {
-        const mapped = this.mapTimelineItem(item, username)
-        if (!mapped.id || seenTweetIds.has(mapped.id)) return
-        seenTweetIds.add(mapped.id)
-        if (this.isReplyItem(item, mapped)) {
-          replies.push(mapped)
-          return
-        }
-        tweets.push(mapped)
+      const polled = await this.pollRunDatasetItems({
+        runId: run.id,
+        datasetId: run.defaultDatasetId,
+        maxItems: Math.max(1, maxItems),
+        shouldCancel,
+        onBatch: async (batch) => {
+          for (const item of batch) {
+            normalizedItems.push(item)
+            processedItems += 1
+
+            const mapped = this.mapTimelineItem(item, username)
+            if (!mapped.id || seenTweetIds.has(mapped.id)) continue
+            seenTweetIds.add(mapped.id)
+            if (this.isReplyItem(item, mapped)) {
+              replies.push(mapped)
+            } else {
+              tweets.push(mapped)
+            }
+
+            if (onProgress && processedItems >= nextEmitAt) {
+              hasInitialProgressEmission = true
+              await onProgress({
+                tweets: tweets.length,
+                replies: replies.length,
+                totalItems: processedItems,
+              })
+              nextEmitAt += PROGRESS_UPDATE_ITEM_INTERVAL
+            } else if (onProgress && !hasInitialProgressEmission && processedItems > 0) {
+              hasInitialProgressEmission = true
+              await onProgress({
+                tweets: tweets.length,
+                replies: replies.length,
+                totalItems: processedItems,
+              })
+              nextEmitAt = Math.max(PROGRESS_UPDATE_ITEM_INTERVAL, processedItems + PROGRESS_UPDATE_ITEM_INTERVAL)
+            }
+          }
+        },
       })
+
+      if (polled.finalStatus !== 'SUCCEEDED') {
+        throw new Error(`Apify profile scraper finished with status ${polled.finalStatus}.`)
+      }
+
+      if (onProgress && processedItems > 0) {
+        await onProgress({
+          tweets: tweets.length,
+          replies: replies.length,
+          totalItems: processedItems,
+        })
+      }
 
       return {
         tweets,
@@ -261,6 +457,9 @@ export class ApifyProvider implements TwitterProvider {
         totalItems: normalizedItems.length,
       }
     } catch (error) {
+      if (error instanceof RunCancelledError) {
+        throw error
+      }
       console.error('[Apify] Error scraping timeline/profile:', error)
       throw new Error(`Failed to scrape timeline/profile: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
@@ -269,32 +468,185 @@ export class ApifyProvider implements TwitterProvider {
   private async scrapeSocialGraph(
     username: string,
     targets: { followers: boolean; following: boolean },
+    maxItems?: number,
+    onProgress?: (progress: SocialGraphProgress) => Promise<void>,
+    shouldCancel?: () => Promise<boolean> | boolean,
+    apifyWebhook?: TwitterScrapeOptions['apifyWebhook'],
   ): Promise<SocialGraphScrape> {
-    console.log(`[Apify] Scraping social graph for @${username}`, targets)
+    console.log(`[Apify] Scraping social graph for @${username}`, {
+      ...targets,
+      maxItems: typeof maxItems === 'number' ? maxItems : 'default',
+    })
 
     try {
-      const run = await this.client.actor(this.userActorId).call({
+      const actorInput: Record<string, unknown> = {
         twitterHandles: [username],
         getFollowers: targets.followers,
         getFollowing: targets.following,
         getRetweeters: false,
         includeUnavailableUsers: false,
-        maxItems: MAX_USER_GRAPH_ITEMS,
+      }
+      if (typeof maxItems === 'number' && Number.isFinite(maxItems) && maxItems > 0) {
+        actorInput.maxItems = Math.floor(maxItems)
+      }
+
+      const run = await this.client.actor(this.userActorId).start(
+        actorInput,
+        this.buildRunWebhooks(apifyWebhook, 'social_graph'),
+      )
+      if (!run.id || !run.defaultDatasetId) {
+        throw new Error('Apify user scraper did not return run metadata.')
+      }
+      if (onProgress) {
+        await onProgress({
+          followers: 0,
+          following: 0,
+          totalItems: 0,
+          runId: run.id,
+        })
+      }
+
+      const normalizedItems: Record<string, unknown>[] = []
+      const pendingUserItems: Record<string, unknown>[] = []
+      const progressFollowers: SocialUser[] = []
+      const progressFollowing: SocialUser[] = []
+      const seenFollowerKeys = new Set<string>()
+      const seenFollowingKeys = new Set<string>()
+      const requestedHandle = this.normalizeHandle(username)
+      let owner: Record<string, unknown> | null = null
+      let firstUserCandidate: Record<string, unknown> | null = null
+      let processedItems = 0
+      let nextEmitAt = PROGRESS_UPDATE_ITEM_INTERVAL
+      let hasInitialProgressEmission = false
+
+      const addUserIfNew = (
+        candidate: Record<string, unknown>,
+        seen: Set<string>,
+        collection: SocialUser[],
+      ) => {
+        const user = this.toSocialUser(candidate)
+        if (!user) return
+        const key = `${user.user_id}:${(user.username || '').toLowerCase()}`
+        if (seen.has(key)) return
+        seen.add(key)
+        collection.push(user)
+      }
+
+      const tryResolveOwner = (item: Record<string, unknown>) => {
+        if (owner) return
+        const type = (item.type as string | undefined)?.toLowerCase()
+        if (type !== 'user') return
+        if (!firstUserCandidate) firstUserCandidate = item
+
+        const inputSource = this.normalizeHandle(item.inputSource as string | undefined)
+        const userName = this.normalizeHandle(item.userName as string | undefined)
+        if (inputSource === requestedHandle || userName === requestedHandle) {
+          owner = item
+        }
+      }
+
+      const processCandidate = (item: Record<string, unknown>) => {
+        const type = (item.type as string | undefined)?.toLowerCase()
+        if (type !== 'user') return
+
+        tryResolveOwner(item)
+        if (!owner) {
+          pendingUserItems.push(item)
+          return
+        }
+
+        const ownerUsername = this.normalizeHandle(
+          (owner.userName as string | undefined) || username,
+        )
+        const ownerId = String(owner.id || '').trim()
+        const candidateId = String(item.id || '').trim()
+        const candidateUsername = this.normalizeHandle(item.userName as string | undefined)
+        const followedBy = this.normalizeHandle(item.followedBy as string | undefined)
+
+        if ((ownerId && candidateId === ownerId) || candidateUsername === ownerUsername) {
+          return
+        }
+
+        if (targets.following && followedBy && followedBy === ownerUsername) {
+          addUserIfNew(item, seenFollowingKeys, progressFollowing)
+          return
+        }
+
+        if (targets.followers && (!followedBy || followedBy !== ownerUsername)) {
+          addUserIfNew(item, seenFollowerKeys, progressFollowers)
+        }
+      }
+
+      const polled = await this.pollRunDatasetItems({
+        runId: run.id,
+        datasetId: run.defaultDatasetId,
+        maxItems,
+        shouldCancel,
+        onBatch: async (batch) => {
+          for (const item of batch) {
+            normalizedItems.push(item)
+            processedItems += 1
+            processCandidate(item)
+
+            if (owner && pendingUserItems.length > 0) {
+              const deferred = pendingUserItems.splice(0, pendingUserItems.length)
+              deferred.forEach((candidate) => processCandidate(candidate))
+            }
+
+            if (onProgress && processedItems >= nextEmitAt) {
+              hasInitialProgressEmission = true
+              await onProgress({
+                followers: progressFollowers.length,
+                following: progressFollowing.length,
+                totalItems: processedItems,
+              })
+              nextEmitAt += PROGRESS_UPDATE_ITEM_INTERVAL
+            } else if (onProgress && !hasInitialProgressEmission && processedItems > 0) {
+              hasInitialProgressEmission = true
+              await onProgress({
+                followers: progressFollowers.length,
+                following: progressFollowing.length,
+                totalItems: processedItems,
+              })
+              nextEmitAt = Math.max(PROGRESS_UPDATE_ITEM_INTERVAL, processedItems + PROGRESS_UPDATE_ITEM_INTERVAL)
+            }
+          }
+        },
       })
 
-      if (run.status === 'FAILED') {
-        throw new Error('Apify user scraper run failed. Verify your Apify account plan and actor access.')
+      if (polled.finalStatus !== 'SUCCEEDED') {
+        throw new Error(`Apify user scraper finished with status ${polled.finalStatus}.`)
       }
 
-      const { items } = await this.client.dataset(run.defaultDatasetId).listItems()
-      const normalizedItems = (items || []) as Record<string, unknown>[]
+      if (!owner && firstUserCandidate) {
+        owner = firstUserCandidate
+      }
+      if (owner && pendingUserItems.length > 0) {
+        const deferred = pendingUserItems.splice(0, pendingUserItems.length)
+        deferred.forEach((candidate) => processCandidate(candidate))
+      }
+
+      const finalFollowers = targets.followers ? this.extractFollowers(normalizedItems, username) : []
+      const finalFollowing = targets.following ? this.extractFollowing(normalizedItems, username) : []
+
+      if (onProgress) {
+        await onProgress({
+          followers: finalFollowers.length,
+          following: finalFollowing.length,
+          totalItems: normalizedItems.length,
+        })
+      }
 
       return {
-        followers: targets.followers ? this.extractFollowers(normalizedItems, username) : [],
-        following: targets.following ? this.extractFollowing(normalizedItems, username) : [],
+        followers: finalFollowers,
+        following: finalFollowing,
         profile: this.extractProfileFromSocialGraph(normalizedItems, username),
+        totalItems: normalizedItems.length,
       }
     } catch (error) {
+      if (error instanceof RunCancelledError) {
+        throw error
+      }
       console.error('[Apify] Error scraping followers/following:', error)
       throw new Error(`Failed to scrape followers/following: ${error instanceof Error ? error.message : 'Unknown error'}`)
     }
@@ -462,30 +814,12 @@ export class ApifyProvider implements TwitterProvider {
     const users: SocialUser[] = []
 
     const addCandidate = (candidate: Record<string, unknown>) => {
-      const userId = String(candidate.id || candidate.userId || candidate.accountId || '').trim()
-      const screenName = String(candidate.screenName || candidate.userName || candidate.username || '').trim()
-      const uniqueKey = `${userId}:${screenName}`.toLowerCase()
-      if (!userId && !screenName) return
+      const user = this.toSocialUser(candidate)
+      if (!user) return
+      const uniqueKey = `${user.user_id}:${user.username || ''}`.toLowerCase()
       if (seen.has(uniqueKey)) return
       seen.add(uniqueKey)
-
-      const name = String(candidate.name || screenName || userId || 'Unknown').trim()
-      const profileImageUrl =
-        (candidate.profileImageUrl as string | undefined) ||
-        (candidate.profilePicture as string | undefined) ||
-        undefined
-
-      const userLink = screenName
-        ? `https://x.com/${screenName}`
-        : `https://twitter.com/intent/user?user_id=${userId}`
-
-      users.push({
-        user_id: userId || screenName,
-        username: screenName || undefined,
-        name,
-        userLink,
-        profileImageUrl,
-      })
+      users.push(user)
     }
 
     items.forEach((item) => {
@@ -495,6 +829,30 @@ export class ApifyProvider implements TwitterProvider {
     })
 
     return users
+  }
+
+  private toSocialUser(candidate: Record<string, unknown>): SocialUser | null {
+    const userId = String(candidate.id || candidate.userId || candidate.accountId || '').trim()
+    const screenName = String(candidate.screenName || candidate.userName || candidate.username || '').trim()
+    if (!userId && !screenName) return null
+
+    const name = String(candidate.name || screenName || userId || 'Unknown').trim()
+    const profileImageUrl =
+      (candidate.profileImageUrl as string | undefined) ||
+      (candidate.profilePicture as string | undefined) ||
+      undefined
+
+    const userLink = screenName
+      ? `https://x.com/${screenName}`
+      : `https://twitter.com/intent/user?user_id=${userId}`
+
+    return {
+      user_id: userId || screenName,
+      username: screenName || undefined,
+      name,
+      userLink,
+      profileImageUrl,
+    }
   }
 
   private extractFollowing(items: Record<string, unknown>[], username: string): SocialUser[] {
@@ -609,7 +967,128 @@ export class ApifyProvider implements TwitterProvider {
     return undefined
   }
 
+  private buildRunWebhooks(
+    webhook: TwitterScrapeOptions['apifyWebhook'] | undefined,
+    runType: 'timeline' | 'social_graph',
+  ) {
+    if (!webhook) return undefined
+    const baseUrl = webhook.baseUrl.trim().replace(/\/+$/, '')
+    const jobId = webhook.jobId.trim()
+    if (!baseUrl || !jobId) return undefined
+    if (!/^https?:\/\//i.test(baseUrl)) return undefined
+
+    const requestUrl = new URL('/api/platforms/twitter/apify-webhook', baseUrl)
+    requestUrl.searchParams.set('jobId', jobId)
+    requestUrl.searchParams.set('runType', runType)
+    if (webhook.token && webhook.token.trim().length > 0) {
+      requestUrl.searchParams.set('token', webhook.token.trim())
+    }
+
+    return {
+      webhooks: [
+        {
+          eventTypes: [...APIFY_TERMINAL_WEBHOOK_EVENTS],
+          requestUrl: requestUrl.toString(),
+          doNotRetry: false,
+          idempotencyKey: `${jobId}-${runType}-${Date.now()}`,
+        },
+      ],
+    }
+  }
+
   private normalizeHandle(handle?: string): string {
     return (handle || '').replace(/^@/, '').trim().toLowerCase()
+  }
+
+  private isRunTerminalStatus(status: string | undefined): boolean {
+    const normalized = (status || '').toUpperCase()
+    return normalized === 'SUCCEEDED'
+      || normalized === 'FAILED'
+      || normalized === 'ABORTED'
+      || normalized === 'TIMED-OUT'
+  }
+
+  private async pollRunDatasetItems(params: {
+    runId: string
+    datasetId: string
+    maxItems?: number
+    shouldCancel?: () => Promise<boolean> | boolean
+    onBatch?: (batch: Record<string, unknown>[]) => Promise<void>
+  }): Promise<RunDatasetPollResult> {
+    const { runId, datasetId, maxItems, shouldCancel, onBatch } = params
+    const pageSize = 1000
+    const allItems: Record<string, unknown>[] = []
+    const runClient = this.client.run(runId)
+    const datasetClient = this.client.dataset(datasetId)
+    let offset = 0
+    let currentStatus: string | undefined
+
+    const abortRunAndThrow = async () => {
+      try {
+        await runClient.abort({ gracefully: false })
+      } catch (abortError) {
+        console.warn(`[Apify] Failed to abort run ${runId}:`, abortError)
+      }
+      throw new RunCancelledError()
+    }
+
+    const cancellationRequested = async () => {
+      if (!shouldCancel) return false
+      try {
+        return Boolean(await shouldCancel())
+      } catch {
+        return false
+      }
+    }
+
+    while (true) {
+      if (await cancellationRequested()) {
+        await abortRunAndThrow()
+      }
+
+      const remaining = typeof maxItems === 'number' && Number.isFinite(maxItems)
+        ? Math.max(0, Math.floor(maxItems) - allItems.length)
+        : Number.POSITIVE_INFINITY
+
+      if (remaining <= 0) break
+
+      const limit = Number.isFinite(remaining)
+        ? Math.max(1, Math.min(pageSize, remaining))
+        : pageSize
+
+      const { items } = await datasetClient.listItems({ offset, limit })
+      const batch = (items || []) as Record<string, unknown>[]
+
+      if (batch.length > 0) {
+        allItems.push(...batch)
+        if (onBatch) {
+          await onBatch(batch)
+        }
+        offset += batch.length
+      }
+
+      if (await cancellationRequested()) {
+        await abortRunAndThrow()
+      }
+
+      const terminal = this.isRunTerminalStatus(currentStatus)
+      if (terminal && batch.length === 0) {
+        break
+      }
+
+      if (!terminal) {
+        const run = await runClient.get({ waitForFinish: 2 })
+        currentStatus = run?.status || currentStatus
+      }
+
+      if (terminal && batch.length > 0) {
+        continue
+      }
+    }
+
+    return {
+      items: allItems,
+      finalStatus: (currentStatus || 'SUCCEEDED').toUpperCase(),
+    }
   }
 }

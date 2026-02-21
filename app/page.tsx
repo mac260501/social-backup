@@ -1,15 +1,10 @@
 import Link from 'next/link'
-import { ThemeToggle } from '@/components/theme-toggle'
 import { SocialLogoRow } from '@/components/social-logos'
 
 export default function HomePage() {
   return (
     <main className="relative min-h-screen overflow-hidden bg-white text-gray-950 dark:bg-black dark:text-white">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(29,155,240,0.24),transparent_50%)] dark:bg-[radial-gradient(circle_at_center,rgba(29,155,240,0.18),transparent_55%)]" />
-
-      <div className="absolute right-4 top-4 z-10">
-        <ThemeToggle />
-      </div>
 
       <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-4xl flex-col items-center justify-center px-6 text-center">
         <p className="mb-6 text-sm font-semibold uppercase tracking-[0.22em] text-gray-500 dark:text-gray-400">
