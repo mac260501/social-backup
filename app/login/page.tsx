@@ -6,6 +6,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SocialLogoRow } from '@/components/social-logos'
 
+function isSafeRelativePath(path: string | null) {
+  return Boolean(path && path.startsWith('/') && !path.startsWith('//'))
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -19,12 +23,15 @@ export default function LoginPage() {
 
   useEffect(() => {
     const handleAuthState = async () => {
+      const requestedNext = searchParams.get('next')
+      const nextPath = isSafeRelativePath(requestedNext) ? requestedNext : '/dashboard'
+
       const {
         data: { user: existingUser },
       } = await supabase.auth.getUser()
 
       if (existingUser) {
-        router.replace('/dashboard')
+        router.replace(nextPath)
         return
       }
 
@@ -42,7 +49,7 @@ export default function LoginPage() {
         } = await supabase.auth.getUser()
 
         if (postExchangeUser) {
-          router.replace('/dashboard')
+          router.replace(nextPath)
           router.refresh()
           return
         }
@@ -52,7 +59,7 @@ export default function LoginPage() {
         return
       }
 
-      router.replace('/dashboard')
+      router.replace(nextPath)
       router.refresh()
     }
 

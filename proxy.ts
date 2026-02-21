@@ -5,13 +5,6 @@ function isSafeRelativePath(path: string | null) {
   return Boolean(path && path.startsWith('/') && !path.startsWith('//'))
 }
 
-function copyCookies(from: NextResponse, to: NextResponse) {
-  from.cookies.getAll().forEach(({ name, value, ...options }) => {
-    to.cookies.set(name, value, options)
-  })
-  return to
-}
-
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
@@ -23,6 +16,18 @@ export async function proxy(request: NextRequest) {
     pathname === '/signup' ||
     pathname === '/privacy' ||
     pathname === '/terms'
+
+  const code = request.nextUrl.searchParams.get('code')
+  if (code && !pathname.startsWith('/api') && pathname !== '/login') {
+    const requestedNext = request.nextUrl.searchParams.get('next')
+    const nextPath = isSafeRelativePath(requestedNext) ? requestedNext : '/dashboard'
+    const loginUrl = request.nextUrl.clone()
+    loginUrl.pathname = '/login'
+    loginUrl.search = ''
+    loginUrl.searchParams.set('code', code)
+    loginUrl.searchParams.set('next', nextPath)
+    return NextResponse.redirect(loginUrl)
+  }
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -44,18 +49,6 @@ export async function proxy(request: NextRequest) {
       },
     }
   )
-
-  const code = request.nextUrl.searchParams.get('code')
-  if (code && !pathname.startsWith('/api')) {
-    const requestedNext = request.nextUrl.searchParams.get('next')
-    const nextPath = isSafeRelativePath(requestedNext) ? requestedNext : '/dashboard'
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
-    const redirectUrl = error
-      ? new URL('/login?error=auth_failed', request.url)
-      : new URL(nextPath, request.url)
-    const redirectResponse = NextResponse.redirect(redirectUrl)
-    return copyCookies(supabaseResponse, redirectResponse)
-  }
 
   const {
     data: { user },
