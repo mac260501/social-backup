@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { TweetCard } from '@/components/platforms/twitter/backup/TweetCard'
 import { formatPartialReasonLabel, getBackupPartialDetails, isArchiveBackup as isArchiveBackupRecord } from '@/lib/platforms/backup'
+import { buildInternalMediaUrl } from '@/lib/storage/media-url'
 
 interface BackupViewerProps {
   backup: BackupRecord
@@ -116,9 +118,7 @@ function normalizeImageUrl(value: string | null) {
   if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:') || value.startsWith('blob:') || value.startsWith('/')) {
     return value
   }
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  if (!supabaseUrl) return null
-  return `${supabaseUrl}/storage/v1/object/public/twitter-media/${value.replace(/^\/+/, '')}`
+  return buildInternalMediaUrl(value)
 }
 
 function decodeMediaUrl(url: string) {
@@ -980,7 +980,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
             <div className="relative h-[190px] bg-gray-900 sm:h-[210px]">
               {coverImageUrl ? (
-                <img src={coverImageUrl} alt="Cover" className="h-full w-full object-cover" />
+                <Image src={coverImageUrl} alt="Cover" fill unoptimized sizes="100vw" className="object-cover" />
               ) : (
                 <div className="h-full w-full bg-gradient-to-r from-blue-500 to-sky-600" />
               )}
@@ -990,7 +990,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
               <div className="-mt-[68px] mb-3 flex items-end justify-between">
                 <div className="relative z-20 h-[134px] w-[134px] overflow-hidden rounded-full border-4 border-black bg-gray-800">
                   {profileImageUrl ? (
-                    <img src={profileImageUrl} alt="Profile" className="h-full w-full object-cover" />
+                    <Image src={profileImageUrl} alt="Profile" fill unoptimized sizes="134px" className="object-cover" />
                   ) : (
                     <div className="h-full w-full" />
                   )}
@@ -1118,7 +1118,14 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                             className="h-full w-full text-left"
                           >
                             {media.type === 'photo' ? (
-                              <img src={media.url} alt="Tweet media" className="h-full w-full object-cover" loading="lazy" />
+                              <Image
+                                src={media.url}
+                                alt="Tweet media"
+                                fill
+                                unoptimized
+                                sizes="(max-width: 768px) 33vw, 220px"
+                                className="object-cover"
+                              />
                             ) : (
                               <>
                                 <video
@@ -1132,17 +1139,21 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                                   autoPlay
                                   onError={(e) => {
                                     e.currentTarget.style.display = 'none'
-                                    const fallback = e.currentTarget.nextElementSibling as HTMLImageElement | null
+                                    const fallback = e.currentTarget.nextElementSibling as HTMLElement | null
                                     if (fallback) fallback.style.display = 'block'
                                   }}
                                 />
                                 {media.fallbackImageUrl ? (
-                                  <img
-                                    src={media.fallbackImageUrl}
-                                    alt="Tweet media"
-                                    className="hidden h-full w-full object-cover"
-                                    loading="lazy"
-                                  />
+                                  <div className="absolute inset-0 hidden">
+                                    <Image
+                                      src={media.fallbackImageUrl}
+                                      alt="Tweet media"
+                                      fill
+                                      unoptimized
+                                      sizes="(max-width: 768px) 33vw, 220px"
+                                      className="object-cover"
+                                    />
+                                  </div>
                                 ) : null}
                               </>
                             )}
@@ -1285,15 +1296,43 @@ export function BackupViewer({ backup }: BackupViewerProps) {
               )}
 
               {selectedMedia.type === 'photo' ? (
-                <img src={selectedMedia.url} alt="Selected media" className="max-h-full max-w-full object-contain" />
+                <Image
+                  src={selectedMedia.url}
+                  alt="Selected media"
+                  width={1600}
+                  height={1600}
+                  unoptimized
+                  className="h-auto max-h-full w-auto max-w-full object-contain"
+                />
               ) : selectedMedia.type === 'animated_gif' && isGifUrl(selectedMediaUrl || selectedMedia.url) ? (
-                <img src={selectedMediaUrl || selectedMedia.url} alt="Selected GIF" className="max-h-full max-w-full object-contain" />
+                <Image
+                  src={selectedMediaUrl || selectedMedia.url}
+                  alt="Selected GIF"
+                  width={1600}
+                  height={1600}
+                  unoptimized
+                  className="h-auto max-h-full w-auto max-w-full object-contain"
+                />
               ) : selectedMedia.type === 'animated_gif' &&
                 !isLikelyVideoUrl(selectedMediaUrl || selectedMedia.url) &&
                 selectedMedia.fallbackImageUrl ? (
-                <img src={selectedMedia.fallbackImageUrl} alt="Selected GIF" className="max-h-full max-w-full object-contain" />
+                <Image
+                  src={selectedMedia.fallbackImageUrl}
+                  alt="Selected GIF"
+                  width={1600}
+                  height={1600}
+                  unoptimized
+                  className="h-auto max-h-full w-auto max-w-full object-contain"
+                />
               ) : selectedMedia.type === 'animated_gif' && (selectedMediaVideoError || !selectedMediaUrl) && selectedMedia.fallbackImageUrl ? (
-                <img src={selectedMedia.fallbackImageUrl} alt="Selected GIF" className="max-h-full max-w-full object-contain" />
+                <Image
+                  src={selectedMedia.fallbackImageUrl}
+                  alt="Selected GIF"
+                  width={1600}
+                  height={1600}
+                  unoptimized
+                  className="h-auto max-h-full w-auto max-w-full object-contain"
+                />
               ) : (
                 <video
                   key={selectedMediaUrl || selectedMedia.url}
@@ -1324,9 +1363,9 @@ export function BackupViewer({ backup }: BackupViewerProps) {
             <aside className="hidden border-l border-white/10 bg-black/95 lg:block">
               <div className="h-full overflow-y-auto p-5">
                 <div className="mb-4 flex items-center gap-3">
-                  <div className="h-10 w-10 overflow-hidden rounded-full bg-gray-700">
+                  <div className="relative h-10 w-10 overflow-hidden rounded-full bg-gray-700">
                     {profileImageUrl ? (
-                      <img src={profileImageUrl} alt={displayName} className="h-full w-full object-cover" />
+                      <Image src={profileImageUrl} alt={displayName} fill unoptimized sizes="40px" className="object-cover" />
                     ) : null}
                   </div>
                   <div>
@@ -1437,8 +1476,8 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                       rel="noopener noreferrer"
                       className="flex gap-3 border-b border-white/10 px-4 py-4 hover:bg-white/5"
                     >
-                      <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-full bg-gray-700">
-                        {p.avatar ? <img src={p.avatar} alt={p.name} className="h-full w-full object-cover" /> : null}
+                      <div className="relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-full bg-gray-700">
+                        {p.avatar ? <Image src={p.avatar} alt={p.name} fill unoptimized sizes="56px" className="object-cover" /> : null}
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-xl font-bold leading-none">{p.name}</p>

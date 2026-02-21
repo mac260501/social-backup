@@ -79,7 +79,7 @@ export async function POST() {
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to save archive request state',
+        error: 'Failed to save archive request state',
       },
       { status: 500 },
     )

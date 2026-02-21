@@ -10,6 +10,7 @@ import { WizardStep1 } from '@/components/archive-wizard/WizardStep1'
 import { WizardStep2 } from '@/components/archive-wizard/WizardStep2'
 import { WizardStep3 } from '@/components/archive-wizard/WizardStep3'
 import { WizardSuccess } from '@/components/archive-wizard/WizardSuccess'
+import { uploadTwitterArchiveDirect } from '@/lib/platforms/twitter/direct-upload'
 import type {
   ArchiveWizardJobSummary,
   ArchiveWizardResolvedStep,
@@ -342,31 +343,22 @@ export default function ArchiveWizardPage() {
     setError(null)
     setUploadMessage(null)
 
-    const formData = new FormData()
-    formData.append('file', selectedFile)
-
     const usernameFromMetadata =
       (user?.user_metadata?.user_name as string | undefined) ||
       (user?.user_metadata?.preferred_username as string | undefined)
 
-    if (usernameFromMetadata) {
-      formData.append('username', usernameFromMetadata)
-    }
-
     try {
-      const response = await fetch('/api/platforms/twitter/upload-archive', {
-        method: 'POST',
-        body: formData,
-      })
-
-      const result = (await response.json()) as {
+      const result = (await uploadTwitterArchiveDirect({
+        file: selectedFile,
+        username: usernameFromMetadata,
+      })) as {
         success?: boolean
         error?: string
         message?: string
         job?: ArchiveWizardJobSummary
       }
 
-      if (!response.ok || !result.success || !result.job) {
+      if (!result.success || !result.job) {
         throw new Error(result.error || 'Failed to upload archive')
       }
 

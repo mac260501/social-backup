@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { TweetText } from './TweetText'
 
 type TweetMediaItem = {
@@ -196,11 +197,14 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
             {getInitials(displayName)}
           </div>
           {profileImageUrl && (
-            <img
+            <Image
               key={profileImageUrl}
               src={profileImageUrl}
               alt={displayName}
-              className="absolute inset-0 w-12 h-12 rounded-full object-cover"
+              fill
+              unoptimized
+              sizes="48px"
+              className="absolute inset-0 rounded-full object-cover"
               onError={(e) => {
                 e.currentTarget.style.display = 'none'
               }}
@@ -285,9 +289,13 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
                       }`}
                     >
                       {type === 'photo' && mediaSource ? (
-                        <img
+                        <Image
                           src={mediaSource}
                           alt="Tweet media"
+                          width={1200}
+                          height={1200}
+                          unoptimized
+                          sizes="(max-width: 768px) 100vw, 50vw"
                           className="w-full h-auto max-h-96 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
                           onError={(e) => {
                             e.currentTarget.style.display = 'none'
@@ -313,9 +321,13 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
                             />
                           ) : null}
                           {previewUrl ? (
-                            <img
+                            <Image
                               src={previewUrl}
                               alt="Tweet media"
+                              width={1200}
+                              height={1200}
+                              unoptimized
+                              sizes="(max-width: 768px) 100vw, 50vw"
                               className={`${mediaSource ? 'hidden' : 'block'} w-full h-auto max-h-96 rounded-lg border border-gray-200 object-cover dark:border-gray-700`}
                               onError={(e) => {
                                 e.currentTarget.style.display = 'none'

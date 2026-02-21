@@ -22,6 +22,8 @@ export const TWITTER_UPLOAD_LIMITS = {
   maxZipEntries: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_ZIP_ENTRIES', 50_000),
   maxMediaFiles: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_MEDIA_FILES', 20_000),
   maxMediaBytes: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_MEDIA_BYTES', 5 * GB),
+  maxMediaEntryBytes: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_MEDIA_ENTRY_BYTES', 250 * MB),
+  maxMetadataEntryBytes: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_METADATA_ENTRY_BYTES', 25 * MB),
 }
 
 export const USER_STORAGE_LIMITS = {

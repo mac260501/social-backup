@@ -156,7 +156,7 @@ export async function GET() {
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to load archive wizard status',
+        error: 'Failed to load archive wizard status',
       },
       { status: 500 },
     )
@@ -271,7 +271,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to update archive wizard status',
+        error: 'Failed to update archive wizard status',
       },
       { status: 500 },
     )

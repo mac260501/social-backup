@@ -1,33 +1,21 @@
 -- Clears runtime data while preserving schema, tables, indexes, and policies.
 -- Run in Supabase SQL editor as an admin role.
--- Note: Direct DELETE on storage.objects is blocked by Supabase.
--- Some Supabase versions expose storage.empty_bucket(text); others do not.
--- This script will clear app tables and only empty storage bucket when supported.
+-- Storage is now in Cloudflare R2, so this script only resets database runtime state.
 
 begin;
 
--- App data tables
-delete from public.media_files;
-delete from public.backup_jobs;
-delete from public.backups;
-delete from public.social_profiles;
+-- Backup/runtime tables
+truncate table public.media_files restart identity cascade;
+truncate table public.backup_jobs restart identity cascade;
+truncate table public.backups restart identity cascade;
+truncate table public.social_profiles restart identity cascade;
 
--- Storage objects (keeps the bucket definition itself), when helper exists.
-do $$
-begin
-  if exists (
-    select 1
-    from pg_proc p
-    join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'storage'
-      and p.proname = 'empty_bucket'
-      and p.pronargs = 1
-  ) then
-    execute 'select storage.empty_bucket(''twitter-media'')';
-  else
-    raise notice 'storage.empty_bucket(text) not available; skipping storage bucket cleanup.';
-  end if;
-end
-$$;
+-- Archive wizard progress fields on profiles (keeps user accounts/profiles intact)
+update public.profiles
+set
+  archive_request_status = null,
+  archive_requested_at = null,
+  archive_reminder_count = 0,
+  archive_last_reminder_at = null;
 
 commit;

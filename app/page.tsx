@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import Link from 'next/link'
 import { SocialLogoRow } from '@/components/social-logos'
 
@@ -7,9 +8,23 @@ export default function HomePage() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(29,155,240,0.24),transparent_50%)] dark:bg-[radial-gradient(circle_at_center,rgba(29,155,240,0.18),transparent_55%)]" />
 
       <section className="relative z-10 mx-auto flex min-h-screen w-full max-w-4xl flex-col items-center justify-center px-6 text-center">
-        <p className="mb-6 text-sm font-semibold uppercase tracking-[0.22em] text-gray-500 dark:text-gray-400">
-          Social Backup
-        </p>
+        <Image
+          src="/logo.png"
+          alt="Social Backup logo"
+          width={596}
+          height={366}
+          priority
+          className="mb-4 h-auto w-44 sm:w-52 md:w-60"
+        />
+
+        <div className="mb-6 inline-flex items-center gap-2">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-gray-500 dark:text-gray-400">
+            Social Backup
+          </p>
+          <span className="rounded-full border border-[#1d9bf0]/35 bg-[#1d9bf0]/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#1d9bf0] dark:border-[#25F4EE]/40 dark:bg-[#25F4EE]/10 dark:text-[#25F4EE]">
+            Beta
+          </span>
+        </div>
 
         <SocialLogoRow />
 

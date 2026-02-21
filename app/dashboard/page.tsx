@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
@@ -28,6 +29,7 @@ import {
 } from '@/lib/platforms/backup'
 import { listPlatformDefinitions } from '@/lib/platforms/registry'
 import type { PlatformId } from '@/lib/platforms/types'
+import { uploadTwitterArchiveDirect } from '@/lib/platforms/twitter/direct-upload'
 
 type DashboardTab = PlatformId | 'all-backups' | 'account'
 type AllBackupsFilter = 'all' | PlatformId
@@ -351,20 +353,12 @@ export default function Dashboard() {
     setUploading(true)
     setUploadResult(null)
 
-    const formData = new FormData()
-    formData.append('file', file)
-    if (twitterUsername) {
-      formData.append('username', twitterUsername)
-    }
-
     try {
-      const response = await fetch('/api/platforms/twitter/upload-archive', {
-        method: 'POST',
-        body: formData,
+      const data = await uploadTwitterArchiveDirect({
+        file,
+        username: twitterUsername || undefined,
       })
-
-      const data = (await response.json()) as UploadResult
-      setUploadResult(data)
+      setUploadResult(data as UploadResult)
 
       if (data.success) {
         await Promise.all([
@@ -473,9 +467,24 @@ export default function Dashboard() {
       <div className="mx-auto w-full max-w-[1440px] px-4 pb-10 pt-5 sm:px-6 lg:px-8">
         <header className="rounded-3xl border border-white/15 bg-[#081331]/88 p-4 shadow-[0_18px_55px_rgba(1,4,15,0.42)] backdrop-blur sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-200/70">Social Backup</p>
-              <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+            <div className="flex items-center gap-3">
+              <Image
+                src="/logo-square.png"
+                alt="Social Backup logo"
+                width={602}
+                height={602}
+                priority
+                className="h-11 w-11 rounded-xl border border-white/20 bg-[#0b1738] p-1"
+              />
+              <div>
+                <div className="inline-flex items-center gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-200/70">Social Backup</p>
+                  <span className="rounded-full border border-cyan-300/35 bg-cyan-300/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-100">
+                    Beta
+                  </span>
+                </div>
+                <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+              </div>
             </div>
             <div className="flex items-center gap-2 sm:gap-3">
               <button

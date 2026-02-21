@@ -8,53 +8,46 @@ Set these in your production host (for example Vercel):
 - `APP_BASE_URL=https://socialbackup.app`
 - `NEXTAUTH_URL=https://socialbackup.app` (recommended fallback)
 - `RESEND_FROM_EMAIL="Social Backup <noreply@socialbackup.app>"`
-- `ARCHIVE_REMINDER_CRON_SECRET=<same secret you already use>`
+- `ARCHIVE_REMINDER_CRON_SECRET=<keep if you still want manual reminder endpoint protection>`
 - `RESEND_API_KEY=<your real resend key>`
+- `INNGEST_EVENT_KEY=<from Inngest>`
+- `INNGEST_SIGNING_KEY=<from Inngest>`
 
-Notes:
-- Keep `ARCHIVE_REMINDER_CRON_SECRET` the same unless you want to rotate it.
-- If you rotate it, update both app env and Supabase cron auth header.
+## 2) Inngest sync and schedule
+Reminders and backup processing now run through Inngest.
 
-## 2) Update Supabase cron reminder endpoint URL
-In Supabase SQL Editor, replace your ngrok reminder cron with the production URL.
+1. Ensure your app is synced in Inngest and points to:
+   - `https://socialbackup.app/api/inngest`
+2. Confirm these functions exist:
+   - `archive-upload-processor`
+   - `snapshot-scrape-processor`
+   - `archive-reminders-hourly`
+3. The reminder schedule is hourly at minute 5 (`5 * * * *`).
 
-```sql
--- remove old schedule if it exists
-select cron.unschedule('archive_wizard_reminders_hourly');
+## 3) Disable legacy Supabase cron (if previously enabled)
+Run in Supabase SQL Editor:
 
--- create new hourly schedule (runs at minute 5)
-select cron.schedule(
-  'archive_wizard_reminders_hourly',
-  '5 * * * *',
-  $$
-  select net.http_post(
-    url := 'https://socialbackup.app/api/archive-wizard/reminders',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer YOUR_ARCHIVE_REMINDER_CRON_SECRET'
-    )
-  );
-  $$
-);
-```
+- `supabase/scripts/disable_archive_reminder_cron.sql`
 
-## 3) Keep migration applied
+## 4) Keep migration applied
 Make sure this migration has already been run in Supabase:
 
 - `supabase/migrations/008_add_archive_wizard_profile_fields.sql`
 
-## 4) Quick production verification
+## 5) Quick production verification
 After deploy:
 
 1. Open `https://socialbackup.app/dashboard/archive-wizard`
 2. Click `I've Requested My Archive`
 3. Confirm profile fields update in Supabase (`archive_request_status`, timestamps)
-4. Trigger reminder endpoint manually once and check response logs
+4. Trigger reminder endpoint manually once and check response logs:
+   - `POST https://socialbackup.app/api/archive-wizard/reminders`
+   - If `ARCHIVE_REMINDER_CRON_SECRET` is set, include `Authorization: Bearer <secret>`
 5. Confirm a reminder email is delivered from your `@socialbackup.app` sender
 
-## 5) Optional cleanup
-- Remove/stop the old ngrok cron schedule if still present.
+## 6) Optional cleanup
 - If any key was ever exposed, rotate:
   - Resend API key
   - Supabase service role key
   - Apify API key
+  - R2 access key pair

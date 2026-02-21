@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient as createServerClient } from '@/lib/supabase/server'
+import { createSignedGetUrl } from '@/lib/storage/r2'
 
 const supabase = createAdminClient()
 
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
     // Get backup and verify ownership
     const { data: backup, error: backupError } = await supabase
       .from('backups')
-      .select('archive_file_path, user_id')
+      .select('archive_file_path, data, user_id')
       .eq('id', backupId)
       .single()
 
@@ -52,38 +53,29 @@ export async function GET(request: Request) {
       }, { status: 403 })
     }
 
-    // Check if archive file exists
-    if (!backup.archive_file_path) {
+    const archiveFilePath = backup.archive_file_path || backup.data?.archive_file_path
+
+    if (!archiveFilePath) {
       return NextResponse.json({
         success: false,
         error: 'Archive file not available for this backup'
       }, { status: 404 })
     }
 
-    // Generate signed URL (valid for 1 hour)
-    const { data: signedUrlData, error: urlError } = await supabase.storage
-      .from('twitter-media')
-      .createSignedUrl(backup.archive_file_path, 3600, {
-        download: true
-      })
-
-    if (urlError || !signedUrlData) {
-      console.error('Error creating signed URL:', urlError)
-      return NextResponse.json({
-        success: false,
-        error: 'Failed to generate download URL'
-      }, { status: 500 })
-    }
+    const downloadUrl = await createSignedGetUrl(archiveFilePath, {
+      expiresInSeconds: 3600,
+      downloadFileName: `${backupId}.zip`,
+    })
 
     return NextResponse.json({
       success: true,
-      downloadUrl: signedUrlData.signedUrl
+      downloadUrl
     })
   } catch (error) {
     console.error('Error:', error)
     return NextResponse.json({
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to generate download URL'
+      error: 'Failed to generate download URL'
     }, { status: 500 })
   }
 }

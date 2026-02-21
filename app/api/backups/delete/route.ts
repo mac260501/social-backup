@@ -60,7 +60,7 @@ export async function DELETE(request: Request) {
     console.error('[Delete Backup] Delete backup error:', error)
     return NextResponse.json({
       success: false,
-      error: error instanceof Error ? error.message : 'Failed to delete backup',
+      error: 'Failed to delete backup',
     }, { status: 500 })
   }
 }

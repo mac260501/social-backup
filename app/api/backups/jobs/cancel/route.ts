@@ -3,6 +3,7 @@ import { ApifyClient } from 'apify-client'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { deleteBackupAndStorageById, type BackupDeleteResult } from '@/lib/backups/delete-backup-data'
+import { deleteObjectsFromR2 } from '@/lib/storage/r2'
 import {
   getBackupJobForUser,
   markBackupJobCleanup,
@@ -12,7 +13,6 @@ import {
 } from '@/lib/jobs/backup-jobs'
 
 const supabase = createAdminClient()
-const STORAGE_BUCKET = 'twitter-media'
 
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -134,13 +134,11 @@ export async function POST(request: Request) {
 
     let stagedInputRemoved = false
     if (stagedInputPath) {
-      const { error: removeError } = await supabase.storage
-        .from(STORAGE_BUCKET)
-        .remove([stagedInputPath])
-      if (removeError) {
-        console.warn('[Cancel Job] Failed to remove staged input:', removeError)
-      } else {
+      try {
+        await deleteObjectsFromR2([stagedInputPath])
         stagedInputRemoved = true
+      } catch (removeError) {
+        console.warn('[Cancel Job] Failed to remove staged input:', removeError)
       }
     }
 

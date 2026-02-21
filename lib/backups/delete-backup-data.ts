@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { deleteObjectsFromR2 } from '@/lib/storage/r2'
 
-const STORAGE_BUCKET = 'twitter-media'
 const STORAGE_REMOVE_BATCH_SIZE = 100
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -117,11 +117,9 @@ export async function deleteBackupAndStorageById(
   const failedDeletes: string[] = []
 
   for (const chunk of chunkArray(filesToDelete, STORAGE_REMOVE_BATCH_SIZE)) {
-    const { error: storageError } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .remove(chunk)
-
-    if (storageError) {
+    try {
+      await deleteObjectsFromR2(chunk)
+    } catch {
       failedDeletes.push(...chunk)
       continue
     }

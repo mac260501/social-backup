@@ -47,6 +47,12 @@ export async function POST(request: Request) {
     const url = new URL(request.url)
     const expectedToken = process.env.APIFY_WEBHOOK_SECRET?.trim()
     const receivedToken = asString(url.searchParams.get('token'))
+
+    if (!expectedToken && process.env.NODE_ENV === 'production') {
+      console.error('[Apify Webhook] APIFY_WEBHOOK_SECRET is not configured in production.')
+      return NextResponse.json({ success: false, error: 'Webhook is not configured' }, { status: 503 })
+    }
+
     if (expectedToken && expectedToken !== receivedToken) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
@@ -129,9 +135,6 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     console.error('[Apify Webhook] Error:', error)
-    return NextResponse.json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to process webhook',
-    }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Failed to process webhook' }, { status: 500 })
   }
 }
