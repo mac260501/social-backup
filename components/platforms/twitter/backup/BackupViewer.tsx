@@ -286,6 +286,18 @@ function isPinnedTweetItem(item: unknown): boolean {
   return getTweetPinnedRank(tweet) !== null
 }
 
+function isReplyTweetItem(item: unknown): boolean {
+  if (!item || typeof item !== 'object') return false
+  const tweet = item as Record<string, unknown>
+  return Boolean(
+    tweet.in_reply_to_status_id
+      || tweet.in_reply_to_status_id_str
+      || tweet.in_reply_to_user_id
+      || tweet.in_reply_to_user_id_str
+      || tweet.in_reply_to_screen_name,
+  )
+}
+
 function getTweetTimestamp(item: unknown): number {
   if (!item || typeof item !== 'object') return 0
   const tweet = item as Record<string, unknown>
@@ -502,7 +514,22 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     optionalNumberValue(profile?.following_count) ??
     optionalNumberValue(profile?.following)
 
-  const tweetCount = numberValue(stats.tweets, tweets.length)
+  const postItems = useMemo(
+    () => sortPostsWithPinnedFirst(tweets.filter((tweet) => !isReplyTweetItem(tweet))),
+    [tweets],
+  )
+  const replyItems = useMemo(() => {
+    const source =
+      replies.length > 0
+        ? replies
+        : tweets.filter((tweet) => isReplyTweetItem(tweet))
+    return sortTweetsByNewest(source)
+  }, [replies, tweets])
+  const timelineMediaSource = useMemo(
+    () => (replies.length > 0 ? [...tweets, ...replies] : tweets),
+    [replies, tweets],
+  )
+  const postCount = numberValue(stats.tweets, postItems.length)
   const mediaCount = numberValue(stats.media_files)
   const dmCount = numberValue(stats.dms, dms.length)
   const followersListCount = numberValue(stats.followers, followers.length)
@@ -529,30 +556,12 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     return `Snapshot @${username}`
   }, [isArchiveBackup, username])
 
-  const postItems = useMemo(
-    () => sortPostsWithPinnedFirst(tweets),
-    [tweets],
-  )
-  const replyItems = useMemo(() => {
-    const source =
-      replies.length > 0
-        ? replies
-        : tweets.filter((tweet) => {
-            const t = tweet as Record<string, unknown>
-            return Boolean(t.in_reply_to_status_id || t.in_reply_to_user_id || t.in_reply_to_screen_name)
-          })
-    return sortTweetsByNewest(source)
-  }, [replies, tweets])
-  const timelineMediaSource = useMemo(
-    () => (replies.length > 0 ? [...tweets, ...replies] : tweets),
-    [replies, tweets],
-  )
   const replyCount = numberValue(stats.replies, replyItems.length)
   const formatCount = (value: number | null) => (value === null ? 'N/A' : value.toLocaleString())
   const summaryEntries: Array<{ label: string; value: string; valueClass?: string }> = [
     { label: 'Backup type', value: methodLabel },
     { label: 'Status', value: partial.isPartial ? 'Partial' : 'Complete', valueClass: partial.isPartial ? 'text-amber-200' : 'text-white' },
-    { label: 'Posts', value: postsIncluded ? tweetCount.toLocaleString() : 'Not included' },
+    { label: 'Posts', value: postsIncluded ? postCount.toLocaleString() : 'Not included' },
     { label: 'Replies', value: repliesIncluded ? replyCount.toLocaleString() : 'Not included' },
     { label: 'Media', value: mediaIncluded ? mediaCount.toLocaleString() : 'Not included' },
     { label: 'Chats', value: chatsIncluded ? dmCount.toLocaleString() : 'Not included' },
@@ -1081,7 +1090,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                     <p className="truncate text-base font-bold sm:text-lg">{displayName}</p>
                     <p className="truncate text-xs text-gray-400">
                       {postsIncluded
-                        ? `${tweetCount.toLocaleString()} posts in backup`
+                        ? `${postCount.toLocaleString()} posts in backup`
                         : 'Posts were not included in this snapshot'}
                     </p>
                   </div>

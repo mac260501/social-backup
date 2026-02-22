@@ -52,7 +52,10 @@ type TweetData = {
   created_at?: string
   retweeted?: boolean
   in_reply_to_status_id?: string | null
+  in_reply_to_status_id_str?: string | null
   in_reply_to_user_id?: string | null
+  in_reply_to_user_id_str?: string | null
+  in_reply_to_screen_name?: string | null
   reply_count?: number
   retweet_count?: number
   favorite_count?: number
@@ -133,7 +136,14 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
   const profileImageUrl = tweet.author?.profileImageUrl || tweet.user?.profile_image_url_https || tweet.user?.profile_image_url || ownerProfileImageUrl || null
   const rawText = tweet.full_text || tweet.text || ''
   const isRetweet = tweet.retweeted || rawText.startsWith('RT @')
-  const isReply = tweet.in_reply_to_status_id || tweet.in_reply_to_user_id
+  const replyTargetStatusId = tweet.in_reply_to_status_id || tweet.in_reply_to_status_id_str || null
+  const replyTargetUserId = tweet.in_reply_to_user_id || tweet.in_reply_to_user_id_str || null
+  const replyTargetScreenName = tweet.in_reply_to_screen_name || null
+  const isReply = Boolean(replyTargetStatusId || replyTargetUserId || replyTargetScreenName)
+  const replyTargetUrl =
+    replyTargetStatusId && replyTargetScreenName
+      ? `https://x.com/${replyTargetScreenName}/status/${replyTargetStatusId}`
+      : null
   const isPinned = Boolean(tweet.is_pinned)
 
   // Extract media from tweet (supports multiple Twitter data formats)
@@ -254,7 +264,20 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M14.046 2.242l-4.148-.01h-.002c-4.374 0-7.8 3.427-7.8 7.802 0 4.098 3.186 7.206 7.465 7.37v3.828a.85.85 0 0 0 .12.403.744.744 0 0 0 1.034.229c.264-.168 6.473-4.14 8.088-5.506 1.902-1.61 3.04-3.97 3.043-6.312v-.017c-.006-4.367-3.43-7.787-7.8-7.788zm3.787 12.972c-1.134.96-4.862 3.405-6.772 4.643V16.67a.75.75 0 0 0-.75-.75h-.396c-3.66 0-6.318-2.476-6.318-5.886 0-3.534 2.768-6.302 6.3-6.302l4.147.01h.002c3.532 0 6.3 2.766 6.302 6.296-.003 1.91-.942 3.844-2.514 5.176z" />
               </svg>
-              <span>Reply</span>
+              <span>
+                Reply
+                {replyTargetScreenName ? `ing to @${replyTargetScreenName}` : ''}
+              </span>
+              {replyTargetUrl ? (
+                <a
+                  href={replyTargetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-2 text-sky-400 hover:underline"
+                >
+                  View parent
+                </a>
+              ) : null}
             </div>
           )}
 

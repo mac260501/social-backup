@@ -707,21 +707,37 @@ export async function processArchiveUploadJob(params: {
     if (files.tweets.length > 0) {
       const tweetsData = files.tweets.flatMap(parseTwitterJSON)
       tweets = tweetsData
-        .map((item: any) => ({
-          id: item.tweet?.id_str,
-          text: item.tweet?.full_text || item.tweet?.text,
-          created_at: item.tweet?.created_at,
-          retweet_count: item.tweet?.retweet_count,
-          favorite_count: item.tweet?.favorite_count,
-          extended_entities: item.tweet?.extended_entities,
-          entities: item.tweet?.entities,
-          media: item.tweet?.extended_entities?.media || item.tweet?.entities?.media,
-          author: {
-            username: accountProfile.username || username,
-            name: accountProfile.displayName || username,
-            profileImageUrl: accountProfile.avatarMediaUrl,
-          },
-        }))
+        .map((item: any) => {
+          const tweet = item?.tweet || item
+          const tweetId = tweet?.id_str || tweet?.id
+          const authorUsername = accountProfile.username || username
+          return {
+            id: tweetId,
+            id_str: tweet?.id_str || (tweetId ? String(tweetId) : undefined),
+            text: tweet?.full_text || tweet?.text,
+            full_text: tweet?.full_text || tweet?.text,
+            created_at: tweet?.created_at,
+            retweet_count: tweet?.retweet_count,
+            favorite_count: tweet?.favorite_count,
+            reply_count: tweet?.reply_count,
+            quote_count: tweet?.quote_count,
+            conversation_id_str: tweet?.conversation_id_str,
+            in_reply_to_status_id: tweet?.in_reply_to_status_id_str || tweet?.in_reply_to_status_id || null,
+            in_reply_to_status_id_str: tweet?.in_reply_to_status_id_str || null,
+            in_reply_to_user_id: tweet?.in_reply_to_user_id_str || tweet?.in_reply_to_user_id || null,
+            in_reply_to_user_id_str: tweet?.in_reply_to_user_id_str || null,
+            in_reply_to_screen_name: tweet?.in_reply_to_screen_name || null,
+            extended_entities: tweet?.extended_entities,
+            entities: tweet?.entities,
+            media: tweet?.extended_entities?.media || tweet?.entities?.media,
+            tweet_url: tweetId && authorUsername ? `https://x.com/${authorUsername}/status/${tweetId}` : undefined,
+            author: {
+              username: authorUsername,
+              name: accountProfile.displayName || username,
+              profileImageUrl: accountProfile.avatarMediaUrl,
+            },
+          }
+        })
         .filter((t: any) => t.id)
       stats.tweets = tweets.length
     }
