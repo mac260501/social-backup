@@ -54,7 +54,9 @@ export function resolveArchiveWizardStep(params: {
   const { status, hasArchiveBackup, hasActiveArchiveJob } = params
 
   if (hasActiveArchiveJob) return 3
-  if (status === 'completed' || hasArchiveBackup) return 'success'
+  // Wizard is only truly complete when a processed archive backup exists.
+  if (hasArchiveBackup) return 'success'
+  if (status === 'completed') return 3
   if (status === 'ready') return 3
   if (status === 'pending' || status === 'pending_extended') return 2
   return 1

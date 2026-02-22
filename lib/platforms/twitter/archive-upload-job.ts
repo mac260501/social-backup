@@ -986,10 +986,10 @@ export async function processArchiveUploadJob(params: {
     }
 
     if (updateError) {
-      console.error('Failed to update backup:', updateError)
-    } else {
-      await recalculateAndPersistBackupStorage(supabase, backupId)
+      throw new Error(`Failed to finalize archive backup record: ${updateError.message}`)
     }
+
+    await recalculateAndPersistBackupStorage(supabase, backupId)
 
     await ensureArchiveJobNotCancelled(jobId)
     await mergeBackupJobPayload(supabase, jobId, {

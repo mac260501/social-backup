@@ -73,6 +73,29 @@ function parseStepParam(value: string | null): ArchiveWizardResolvedStep | null 
   return null
 }
 
+function stepRank(step: ArchiveWizardResolvedStep): number {
+  if (step === 'success') return 4
+  return step
+}
+
+function resolveRequestedStep(params: {
+  requestedStep: ArchiveWizardResolvedStep | null
+  suggestedStep: ArchiveWizardResolvedStep
+}): ArchiveWizardResolvedStep {
+  const { requestedStep, suggestedStep } = params
+  if (!requestedStep) return suggestedStep
+  if (requestedStep === 'success') {
+    return suggestedStep === 'success' ? 'success' : suggestedStep
+  }
+  if (suggestedStep === 'success') {
+    return requestedStep
+  }
+  if (stepRank(requestedStep) <= stepRank(suggestedStep)) {
+    return requestedStep
+  }
+  return suggestedStep
+}
+
 export default function ArchiveWizardPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -114,8 +137,9 @@ export default function ArchiveWizardPage() {
     setCurrentStep(nextStep)
   }
 
-  const loadWizardStatus = async () => {
-    setStatusLoading(true)
+  const loadWizardStatus = async (options?: { silent?: boolean }): Promise<ArchiveWizardStatusResponse | null> => {
+    const silent = Boolean(options?.silent)
+    if (!silent) setStatusLoading(true)
     try {
       const response = await fetch('/api/archive-wizard/status', { cache: 'no-store' })
       const result = (await response.json()) as ArchiveWizardStatusResponse
@@ -138,15 +162,18 @@ export default function ArchiveWizardPage() {
       }
 
       const requestedStep = parseStepParam(searchParams.get('step'))
-      if (requestedStep) {
-        setCurrentStep(requestedStep)
-      } else {
-        setCurrentStep(result.suggestedStep)
-      }
+      setCurrentStep(
+        resolveRequestedStep({
+          requestedStep,
+          suggestedStep: result.suggestedStep,
+        }),
+      )
+      return result
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : 'Failed to load wizard status')
+      return null
     } finally {
-      setStatusLoading(false)
+      if (!silent) setStatusLoading(false)
     }
   }
 
@@ -171,11 +198,19 @@ export default function ArchiveWizardPage() {
   }, [router, supabase])
 
   useEffect(() => {
+    if (!wizardStatus) return
     const stepFromUrl = parseStepParam(searchParams.get('step'))
-    if (stepFromUrl && stepFromUrl !== currentStep) {
-      setCurrentStep(stepFromUrl)
+    if (!stepFromUrl) return
+
+    const resolvedStep = resolveRequestedStep({
+      requestedStep: stepFromUrl,
+      suggestedStep: wizardStatus.suggestedStep,
+    })
+
+    if (resolvedStep !== currentStep) {
+      setCurrentStep(resolvedStep)
     }
-  }, [currentStep, searchParams])
+  }, [currentStep, searchParams, wizardStatus])
 
   useEffect(() => {
     if (!activeJob) return
@@ -213,17 +248,31 @@ export default function ArchiveWizardPage() {
           const backupId = matchedJob.result_backup_id || null
           const backup = backupId ? data.backups?.find((item) => item.id === backupId) || null : null
 
+          if (!backupId || !backup) {
+            setUploadMessage('Archive job finished. Verifying backup record...')
+            await loadWizardStatus({ silent: true })
+            return
+          }
+
           setSuccessBackupId(backupId)
           setSuccessStats(toSuccessStats(backup))
 
-          await fetch('/api/archive-wizard/status', {
+          const completionResponse = await fetch('/api/archive-wizard/status', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: 'completed' }),
           })
+          const completionResult = (await completionResponse.json().catch(() => null)) as ArchiveWizardStatusResponse | null
 
           setUploadMessage('Archive backup completed successfully.')
-          setUrlStep('success')
+          if (!completionResponse.ok || !completionResult?.success) {
+            await loadWizardStatus({ silent: true })
+            setError(completionResult?.error || 'Archive completed, but wizard status could not be finalized automatically.')
+            return
+          }
+
+          setWizardStatus(completionResult)
+          setUrlStep(completionResult.suggestedStep)
         }
       } catch (pollError) {
         console.error('Failed to poll archive job:', pollError)
@@ -330,6 +379,20 @@ export default function ArchiveWizardPage() {
     } finally {
       setUpdatingStepState(false)
     }
+  }
+
+  const handleBackToStep1 = () => {
+    setError(null)
+    setStepMessage(null)
+    setUrlStep(1)
+  }
+
+  const handleBackToStep2 = () => {
+    if (uploading) return
+    if (activeJob && (activeJob.status === 'queued' || activeJob.status === 'processing')) return
+    setError(null)
+    setUploadMessage(null)
+    setUrlStep(2)
   }
 
   const handleUpload = async () => {
@@ -443,6 +506,7 @@ export default function ArchiveWizardPage() {
               updating={updatingStepState}
               message={stepMessage}
               error={error}
+              onBack={handleBackToStep1}
               onDownloaded={() => {
                 void handleDownloaded()
               }}
@@ -471,6 +535,7 @@ export default function ArchiveWizardPage() {
               onUpload={() => {
                 void handleUpload()
               }}
+              onBack={handleBackToStep2}
             />
           )}
 

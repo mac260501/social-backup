@@ -185,6 +185,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Invalid status value' }, { status: 400 })
     }
 
+    if (body.status === 'completed') {
+      const { count: archiveBackupCount, error: backupCountError } = await supabase
+        .from('backups')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('source', 'archive')
+
+      if (backupCountError) {
+        throw new Error(`Failed to validate archive completion: ${backupCountError.message}`)
+      }
+
+      if (!archiveBackupCount || archiveBackupCount <= 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Cannot mark setup as completed until a processed archive backup exists.',
+          },
+          { status: 409 },
+        )
+      }
+    }
+
     const now = new Date().toISOString()
     const patch: Record<string, unknown> = {
       archive_request_status: body.status,

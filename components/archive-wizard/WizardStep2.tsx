@@ -4,9 +4,10 @@ type WizardStep2Props = {
   error: string | null
   onDownloaded: () => void
   onNotReady: () => void
+  onBack: () => void
 }
 
-export function WizardStep2({ updating, message, error, onDownloaded, onNotReady }: WizardStep2Props) {
+export function WizardStep2({ updating, message, error, onDownloaded, onNotReady, onBack }: WizardStep2Props) {
   return (
     <section className="rounded-3xl border border-white/15 bg-[#0f1937]/92 p-6 shadow-[0_14px_40px_rgba(4,10,28,0.35)] sm:p-8">
       <h2 className="text-3xl font-bold text-white">Download Your Archive</h2>
@@ -22,6 +23,14 @@ export function WizardStep2({ updating, message, error, onDownloaded, onNotReady
       </ol>
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={updating}
+          className="inline-flex items-center justify-center rounded-full border border-white/30 bg-white/5 px-6 py-3 text-sm font-semibold text-blue-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Back to step 1
+        </button>
         <a
           href="https://x.com/settings/download_your_data"
           target="_blank"

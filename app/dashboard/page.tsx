@@ -11,7 +11,6 @@ import { createClient } from '@/lib/supabase/client'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
 import { InstagramPanel } from '@/components/dashboard/platforms/InstagramPanel'
 import { TikTokPanel } from '@/components/dashboard/platforms/TikTokPanel'
-import { DashboardBanner } from '@/components/archive-wizard/DashboardBanner'
 import {
   TwitterPanel,
   type BackupJobItem,
@@ -33,6 +32,7 @@ import {
   type DirectUploadProgress,
   uploadTwitterArchiveDirect,
 } from '@/lib/platforms/twitter/direct-upload'
+import type { ArchiveWizardResolvedStep } from '@/lib/archive-wizard/types'
 
 type DashboardTab = PlatformId | 'all-backups' | 'account'
 type AllBackupsFilter = 'all' | PlatformId
@@ -59,6 +59,13 @@ type ArchiveWizardStatusResponse = {
   status?: ArchiveWizardState
   archiveRequestedAt?: string | null
   hasArchiveBackup?: boolean
+  suggestedStep?: ArchiveWizardResolvedStep
+  activeArchiveJob?: {
+    id: string
+    status: 'queued' | 'processing' | 'completed' | 'failed'
+    progress: number
+    message?: string | null
+  } | null
   schemaReady?: boolean
 }
 const DEFAULT_TWITTER_SCRAPE_TARGETS: TwitterScrapeTargets = {
@@ -153,6 +160,8 @@ export default function Dashboard() {
   const [reportedStorageLimitBytes, setReportedStorageLimitBytes] = useState<number>(5 * 1024 * 1024 * 1024)
   const [archiveWizardStatus, setArchiveWizardStatus] = useState<ArchiveWizardState>(null)
   const [archiveRequestedAt, setArchiveRequestedAt] = useState<string | null>(null)
+  const [archiveWizardSuggestedStep, setArchiveWizardSuggestedStep] = useState<ArchiveWizardResolvedStep>(1)
+  const [archiveWizardHasArchiveBackup, setArchiveWizardHasArchiveBackup] = useState(false)
   const [archiveSetupMessage, setArchiveSetupMessage] = useState<string | null>(null)
 
   const [uploading, setUploading] = useState(false)
@@ -209,9 +218,11 @@ export default function Dashboard() {
       const result = (await response.json()) as ArchiveWizardStatusResponse
       if (!response.ok || !result.success) return
 
-      const resolvedStatus = result.status || (result.hasArchiveBackup ? 'completed' : null)
+      const resolvedStatus = result.status || null
       setArchiveWizardStatus(resolvedStatus)
       setArchiveRequestedAt(result.archiveRequestedAt || null)
+      setArchiveWizardSuggestedStep(result.suggestedStep || 1)
+      setArchiveWizardHasArchiveBackup(Boolean(result.hasArchiveBackup))
     } catch (error) {
       console.error('Error fetching archive wizard status:', error)
     }
@@ -265,6 +276,61 @@ export default function Dashboard() {
 
   const hasActiveJob = jobs.some((job) => job.status === 'queued' || job.status === 'processing')
   const activeJob = jobs.find((job) => job.status === 'queued' || job.status === 'processing') || null
+  const activeArchiveJob =
+    jobs.find((job) => job.job_type === 'archive_upload' && (job.status === 'queued' || job.status === 'processing')) || null
+  const showArchiveWizardCard = activeTab === 'twitter' && !archiveWizardHasArchiveBackup
+
+  const archiveWizardCard = useMemo(() => {
+    if (archiveWizardHasArchiveBackup) {
+      return null
+    }
+
+    if (activeArchiveJob) {
+      return {
+        eyebrow: 'Onboarding • Step 3 of 3',
+        title: 'Processing your archive backup',
+        description: activeArchiveJob.message || 'Your archive uploaded successfully and is now being processed in the background.',
+        ctaHref: '/dashboard/archive-wizard?step=3',
+        ctaLabel: 'View Processing',
+        stepHint: null as string | null,
+      }
+    }
+
+    if (archiveWizardSuggestedStep === 3 || archiveWizardStatus === 'ready') {
+      return {
+        eyebrow: 'Onboarding • Step 3 of 3',
+        title: 'Upload your Twitter archive ZIP',
+        description: 'Your archive is ready. Return to the wizard and upload the ZIP to finish setup.',
+        ctaHref: '/dashboard/archive-wizard?step=3',
+        ctaLabel: 'Upload Archive',
+        stepHint: null as string | null,
+      }
+    }
+
+    if (archiveWizardSuggestedStep === 2 || archiveWizardStatus === 'pending' || archiveWizardStatus === 'pending_extended') {
+      const waitingLabel =
+        archiveWizardStatus === 'pending_extended'
+          ? 'Twitter may still be preparing it. We will send another reminder shortly.'
+          : 'Twitter is preparing your archive. Continue to the wizard once your ZIP is ready.'
+      return {
+        eyebrow: 'Onboarding • Step 2 of 3',
+        title: 'Wait for your Twitter archive',
+        description: waitingLabel,
+        ctaHref: '/dashboard/archive-wizard?step=2',
+        ctaLabel: 'Continue Wizard',
+        stepHint: archiveRequestedAt ? `Requested: ${formatDate(archiveRequestedAt)}` : null,
+      }
+    }
+
+    return {
+      eyebrow: 'Onboarding',
+      title: 'Back up your Twitter data',
+      description: 'Start the archive wizard to request your Twitter archive now and upload it when it\'s ready.',
+      ctaHref: '/dashboard/archive-wizard?step=1',
+      ctaLabel: 'Start Archive Wizard',
+      stepHint: null as string | null,
+    }
+  }, [activeArchiveJob, archiveRequestedAt, archiveWizardHasArchiveBackup, archiveWizardStatus, archiveWizardSuggestedStep])
 
   useEffect(() => {
     if (!user || !hasActiveJob) return
@@ -401,11 +467,6 @@ export default function Dashboard() {
       if (data.success) {
         await Promise.all([
           fetchBackupsSummary(),
-          fetch('/api/archive-wizard/status', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'completed' }),
-          }).catch(() => null),
           fetchArchiveWizardStatus(),
         ])
       }
@@ -635,25 +696,27 @@ export default function Dashboard() {
             </section>
           )}
 
-          {(archiveWizardStatus === 'pending' || archiveWizardStatus === 'pending_extended') && (
-            <DashboardBanner
-              status={archiveWizardStatus}
-              archiveRequestedAt={archiveRequestedAt}
-            />
-          )}
-
-          {activeTab === 'twitter' && backupsCount === 0 && archiveWizardStatus !== 'completed' && (
+          {showArchiveWizardCard && archiveWizardCard && (
             <section className="mb-6 rounded-3xl border border-blue-300/35 bg-blue-500/12 p-6 shadow-[0_12px_30px_rgba(3,25,63,0.3)]">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-100/75">Onboarding</p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">Back up your Twitter data</h3>
-              <p className="mt-2 text-sm text-blue-100/80">
-                Start the archive wizard to request your Twitter archive now and upload it when it&apos;s ready.
-              </p>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-100/75">{archiveWizardCard.eyebrow}</p>
+              <h3 className="mt-2 text-2xl font-semibold text-white">{archiveWizardCard.title}</h3>
+              <p className="mt-2 text-sm text-blue-100/80">{archiveWizardCard.description}</p>
+              {archiveWizardCard.stepHint && (
+                <p className="mt-2 text-xs text-blue-100/70">{archiveWizardCard.stepHint}</p>
+              )}
+              {activeArchiveJob && (
+                <div className="mt-4 h-2 w-full max-w-xl rounded-full bg-white/15">
+                  <div
+                    className="h-2 rounded-full bg-gradient-to-r from-blue-300 to-cyan-300 transition-all"
+                    style={{ width: `${Math.max(0, Math.min(100, Number(activeArchiveJob.progress) || 0))}%` }}
+                  />
+                </div>
+              )}
               <a
-                href="/dashboard/archive-wizard"
+                href={archiveWizardCard.ctaHref}
                 className="mt-4 inline-flex w-full items-center justify-center rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-gray-200 sm:w-auto"
               >
-                Start Archive Wizard
+                {archiveWizardCard.ctaLabel}
               </a>
             </section>
           )}

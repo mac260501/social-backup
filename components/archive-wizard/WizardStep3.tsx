@@ -13,6 +13,7 @@ type WizardStep3Props = {
   error: string | null
   onFileSelected: (file: File | null) => void
   onUpload: () => void
+  onBack: () => void
 }
 
 function formatBytes(bytes: number) {
@@ -39,6 +40,7 @@ export function WizardStep3({
   error,
   onFileSelected,
   onUpload,
+  onBack,
 }: WizardStep3Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -91,6 +93,14 @@ export function WizardStep3({
       )}
 
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={uploading || Boolean(processing)}
+          className="inline-flex items-center justify-center rounded-full border border-white/30 bg-white/5 px-6 py-3 text-sm font-semibold text-blue-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-55"
+        >
+          Back to step 2
+        </button>
         <button
           type="button"
           onClick={onUpload}
