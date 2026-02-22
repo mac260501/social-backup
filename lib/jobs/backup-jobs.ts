@@ -22,6 +22,7 @@ export type BackupJob = {
 }
 
 export const ACTIVE_BACKUP_JOB_STATUSES: BackupJobStatus[] = ['queued', 'processing']
+const QUEUED_JOB_TIMEOUT_MS = 5 * 60 * 1000
 
 function normalizeProgress(progress: number) {
   if (!Number.isFinite(progress)) return 0
@@ -44,20 +45,54 @@ export async function findActiveBackupJobForUser(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<BackupJob | null> {
-  const { data, error } = await supabase
-    .from('backup_jobs')
-    .select('*')
-    .eq('user_id', userId)
-    .in('status', ACTIVE_BACKUP_JOB_STATUSES)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
+  const loadActiveJob = async () => {
+    const { data, error } = await supabase
+      .from('backup_jobs')
+      .select('*')
+      .eq('user_id', userId)
+      .in('status', ACTIVE_BACKUP_JOB_STATUSES)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
 
-  if (error) {
-    throw new Error(`Failed to load active backup jobs: ${error.message}`)
+    if (error) {
+      throw new Error(`Failed to load active backup jobs: ${error.message}`)
+    }
+
+    return (data as BackupJob | null) ?? null
   }
 
-  return (data as BackupJob | null) ?? null
+  const activeJob = await loadActiveJob()
+  if (!activeJob) return null
+
+  const startedAt = activeJob.started_at ? Date.parse(activeJob.started_at) : Number.NaN
+  const createdAt = Date.parse(activeJob.created_at)
+  const ageMs = Number.isFinite(startedAt)
+    ? Date.now() - startedAt
+    : Number.isFinite(createdAt)
+      ? Date.now() - createdAt
+      : 0
+
+  if (activeJob.status === 'queued' && ageMs > QUEUED_JOB_TIMEOUT_MS) {
+    const timeoutMinutes = Math.round(QUEUED_JOB_TIMEOUT_MS / 60000)
+    const timeoutMessage =
+      `Backup job did not start within ${timeoutMinutes} minutes. Please retry.`
+    await updateBackupJob(supabase, activeJob.id, {
+      status: 'failed',
+      progress: Math.max(0, activeJob.progress || 0),
+      message: timeoutMessage,
+      errorMessage:
+        'Queue timeout: worker did not pick up this job. Verify Inngest keys and environment wiring.',
+    })
+    await mergeBackupJobPayload(supabase, activeJob.id, {
+      lifecycle_state: 'failed',
+      queue_timeout: true,
+      queue_timed_out_at: nowIso(),
+    })
+    return await loadActiveJob()
+  }
+
+  return activeJob
 }
 
 export async function createBackupJob(

@@ -491,6 +491,7 @@ export async function processSnapshotScrapeJob(params: {
           coverImageUrl: result.metadata.coverImageUrl,
           followersCount: result.metadata.profileFollowersCount,
           followingCount: result.metadata.profileFollowingCount,
+          statusesCount: result.metadata.profileStatusesCount,
         },
         stats: {
           tweets: result.tweets.length,

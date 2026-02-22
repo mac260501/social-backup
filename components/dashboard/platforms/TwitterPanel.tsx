@@ -1,4 +1,4 @@
-import { FileArchive, Globe } from 'lucide-react'
+import { ExternalLink, FileArchive, Globe } from 'lucide-react'
 import {
   formatBackupMethodLabel,
   formatPartialReasonLabel,
@@ -63,6 +63,7 @@ export type BackupJobItem = {
   payload?: Record<string, unknown> | null
   result_backup_id?: string | null
   error_message?: string | null
+  started_at?: string | null
   created_at?: string
   updated_at?: string
 }
@@ -93,6 +94,8 @@ type TwitterPanelProps = {
   jobs: BackupJobItem[]
   activeJob: BackupJobItem | null
   uploading: boolean
+  uploadProgressPercent: number
+  uploadProgressDetail: string | null
   uploadResult: UploadResult | null
   scraping: boolean
   scrapeResult: ScrapeResult | null
@@ -117,6 +120,8 @@ export function TwitterPanel({
   jobs,
   activeJob,
   uploading,
+  uploadProgressPercent,
+  uploadProgressDetail,
   uploadResult,
   scraping,
   scrapeResult,
@@ -153,6 +158,26 @@ export function TwitterPanel({
   const hasSelectedTargets = selectedTargetCount > 0
   const hasActiveJob = Boolean(activeJob && (activeJob.status === 'queued' || activeJob.status === 'processing'))
   const inProgressJobs = jobs.filter((job) => job.status === 'queued' || job.status === 'processing')
+  const activeProgress = Math.max(0, Math.min(100, Number(activeJob?.progress) || 0))
+  const activePayload = toRecord(activeJob?.payload)
+  const activeLiveMetrics = toRecord(activePayload.live_metrics)
+  const activeIsArchiveJob = activeJob?.job_type === 'archive_upload'
+  const activeLifecycleState = typeof activePayload.lifecycle_state === 'string' ? activePayload.lifecycle_state : ''
+  const activeIsCleaning = activeLifecycleState === 'cleanup' || activeLifecycleState === 'cancelling'
+  const activeIsCancelling = activeJob ? cancellingJobId === activeJob.id : false
+  const activeStartedLabel = (() => {
+    const source = activeJob?.started_at || activeJob?.created_at
+    if (!source) return null
+    const date = new Date(source)
+    if (Number.isNaN(date.getTime())) return null
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  })()
   const estimatePayloadBytes = (value: unknown) => {
     try {
       if (!value || typeof value !== 'object') return 0
@@ -206,11 +231,54 @@ export function TwitterPanel({
 
       {hasActiveJob && activeJob && (
         <section className="rounded-3xl border border-blue-300/40 bg-blue-50 p-5 dark:border-blue-500/30 dark:bg-blue-500/10">
-          <p className="text-sm font-semibold text-blue-800 dark:text-blue-200">
-            Backup job in progress
-          </p>
-          <p className="mt-1 text-sm text-blue-700 dark:text-blue-100">
-            {activeJob.message || 'Your backup job is running.'} You can leave this page and check progress on your dashboard or backups page.
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-blue-800 dark:text-blue-200">
+                Backup job in progress
+              </p>
+              <p className="mt-1 text-sm text-blue-700 dark:text-blue-100">
+                {activeJob.message || 'Your backup job is running.'}
+              </p>
+              {activeStartedLabel && (
+                <p className="mt-1 text-xs text-blue-700/80 dark:text-blue-200/80">Started {activeStartedLabel}</p>
+              )}
+            </div>
+            <button
+              onClick={async () => {
+                setCancellingJobId(activeJob.id)
+                try {
+                  await onCancelJob(activeJob.id)
+                } catch (error) {
+                  console.error('Cancel job error:', error)
+                  alert(error instanceof Error ? error.message : 'Failed to cancel job.')
+                } finally {
+                  setCancellingJobId(null)
+                }
+              }}
+              disabled={activeIsCancelling || activeIsCleaning}
+              className="w-full rounded-full border border-red-500/50 bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:py-1"
+            >
+              {activeIsCancelling ? 'Cancelling...' : activeIsCleaning ? 'Cleaning...' : 'Cancel'}
+            </button>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/15">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-blue-400 to-cyan-300 transition-all"
+              style={{ width: `${activeProgress}%` }}
+            />
+          </div>
+          {!activeIsArchiveJob && (
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-blue-700 dark:text-blue-200 sm:grid-cols-3">
+              <p>Tweets: {formatCount(activeLiveMetrics.tweets_fetched)}</p>
+              <p>Replies: {formatCount(activeLiveMetrics.replies_fetched)}</p>
+              <p>Followers: {formatCount(activeLiveMetrics.followers_fetched)}</p>
+              <p>Following: {formatCount(activeLiveMetrics.following_fetched)}</p>
+              <p>Tokens Used: {formatUsd(Number(activeLiveMetrics.api_cost_usd || 0))}</p>
+              <p>Phase: {typeof activeLiveMetrics.phase === 'string' ? activeLiveMetrics.phase : 'running'}</p>
+            </div>
+          )}
+          <p className="mt-2 text-xs text-blue-700/80 dark:text-blue-200/80">
+            You can leave this page and continue tracking this job in All Backups.
           </p>
         </section>
       )}
@@ -289,6 +357,21 @@ export function TwitterPanel({
               {uploading ? 'Uploading...' : hasActiveJob ? 'Job in progress...' : 'Choose ZIP File'}
             </label>
           </div>
+
+          {uploading && (
+            <div className="mt-4 rounded-xl border border-blue-300/30 bg-blue-500/10 p-3">
+              <div className="flex items-center justify-between text-xs text-blue-100/85">
+                <span>{uploadProgressDetail || 'Uploading archive...'}</span>
+                <span>{Math.max(0, Math.min(100, uploadProgressPercent))}%</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/15">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-blue-400 to-cyan-300 transition-all"
+                  style={{ width: `${Math.max(0, Math.min(100, uploadProgressPercent))}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           {uploadResult && (
             <p className={`mt-4 text-sm ${uploadResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
@@ -451,20 +534,10 @@ export function TwitterPanel({
                       {isCancelling ? 'Cancelling...' : isCleaning ? 'Cleaning...' : 'Cancel'}
                     </button>
                   </div>
-                  {!isArchiveJob && (
-                    <details className="mt-3 rounded-xl border border-white/10 bg-white/60 px-3 py-2 dark:bg-black/30">
-                      <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
-                        Live updates
-                      </summary>
-                      <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-700 dark:text-gray-300 sm:grid-cols-3">
-                        <p>Tweets: {formatCount(liveMetrics.tweets_fetched)}</p>
-                        <p>Replies: {formatCount(liveMetrics.replies_fetched)}</p>
-                        <p>Followers: {formatCount(liveMetrics.followers_fetched)}</p>
-                        <p>Following: {formatCount(liveMetrics.following_fetched)}</p>
-                        <p>Tokens Used: {formatUsd(Number(liveMetrics.api_cost_usd || 0))}</p>
-                        <p>Phase: {typeof liveMetrics.phase === 'string' ? liveMetrics.phase : 'running'}</p>
-                      </div>
-                    </details>
+                  {!isArchiveJob && typeof liveMetrics.phase === 'string' && (
+                    <p className="mt-2 text-xs uppercase tracking-wide text-gray-600 dark:text-gray-300">
+                      Phase: {liveMetrics.phase}
+                    </p>
                   )}
                 </div>
               )
@@ -529,12 +602,15 @@ export function TwitterPanel({
                   </div>
 
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <button
-                      onClick={() => onOpenBackup(backup.id)}
-                      className="rounded-full bg-white px-2 py-2 text-xs font-semibold text-black hover:bg-gray-200 dark:bg-white dark:text-black"
+                    <a
+                      href={`/dashboard/backup/${backup.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-1 rounded-full bg-white px-2 py-2 text-xs font-semibold text-black hover:bg-gray-200 dark:bg-white dark:text-black"
                     >
                       View
-                    </button>
+                      <ExternalLink size={12} />
+                    </a>
                     <button
                       onClick={() => onDownloadBackup(backup.id)}
                       disabled={!isArchive}

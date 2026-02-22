@@ -27,7 +27,8 @@ export type BackupPartialDetails = {
 }
 
 const PARTIAL_REASON_LABELS: Record<string, string> = {
-  timeline_limit_reached: 'Timeline capped by run budget',
+  timeline_limit_reached: 'Timeline reached this run\'s item limit',
+  timeline_source_gap: 'Source API returned fewer timeline items than the profile total',
   social_graph_budget_cap_reached: 'Followers/following capped by run budget',
 }
 

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { FileArchive, FolderArchive, Globe, LogOut, UserRound } from 'lucide-react'
+import { ExternalLink, FileArchive, FolderArchive, Globe, LogOut, UserRound } from 'lucide-react'
 import { InstagramLogo, TikTokLogo, XLogo } from '@/components/social-logos'
 import { createClient } from '@/lib/supabase/client'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
@@ -29,7 +29,10 @@ import {
 } from '@/lib/platforms/backup'
 import { listPlatformDefinitions } from '@/lib/platforms/registry'
 import type { PlatformId } from '@/lib/platforms/types'
-import { uploadTwitterArchiveDirect } from '@/lib/platforms/twitter/direct-upload'
+import {
+  type DirectUploadProgress,
+  uploadTwitterArchiveDirect,
+} from '@/lib/platforms/twitter/direct-upload'
 
 type DashboardTab = PlatformId | 'all-backups' | 'account'
 type AllBackupsFilter = 'all' | PlatformId
@@ -47,6 +50,10 @@ type StorageSummary = {
   remainingBytes?: number
 }
 type ArchiveWizardState = 'pending' | 'pending_extended' | 'ready' | 'completed' | 'skipped' | null
+type PendingDeleteState = {
+  backupIds: string[]
+  label: string
+}
 type ArchiveWizardStatusResponse = {
   success?: boolean
   status?: ArchiveWizardState
@@ -149,12 +156,15 @@ export default function Dashboard() {
   const [archiveSetupMessage, setArchiveSetupMessage] = useState<string | null>(null)
 
   const [uploading, setUploading] = useState(false)
+  const [uploadProgressPercent, setUploadProgressPercent] = useState(0)
+  const [uploadProgressDetail, setUploadProgressDetail] = useState<string | null>(null)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
 
   const [scraping, setScraping] = useState(false)
   const [scrapeResult, setScrapeResult] = useState<ScrapeResult | null>(null)
   const [twitterScrapeTargets, setTwitterScrapeTargets] = useState<TwitterScrapeTargets>(DEFAULT_TWITTER_SCRAPE_TARGETS)
-  const [pendingDelete, setPendingDelete] = useState<{ backupId: string; label: string } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<PendingDeleteState | null>(null)
+  const [selectedBackupIds, setSelectedBackupIds] = useState<string[]>([])
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deletingBackup, setDeletingBackup] = useState(false)
   const tabParam = searchParams.get('tab')
@@ -280,6 +290,11 @@ export default function Dashboard() {
     )
   }, [archiveRequestedParam])
 
+  useEffect(() => {
+    const existing = new Set(allBackups.map((backup) => backup.id))
+    setSelectedBackupIds((prev) => prev.filter((id) => existing.has(id)))
+  }, [allBackups])
+
   const handleSignOut = async () => {
     await supabase.auth.signOut()
     router.push('/login')
@@ -288,7 +303,16 @@ export default function Dashboard() {
 
   const handleDeleteBackup = async (backupId: string, label: string) => {
     setDeleteError(null)
-    setPendingDelete({ backupId, label })
+    setPendingDelete({ backupIds: [backupId], label })
+  }
+
+  const handleDeleteSelectedBackups = () => {
+    if (selectedBackupIds.length === 0) return
+    setDeleteError(null)
+    setPendingDelete({
+      backupIds: selectedBackupIds,
+      label: `${selectedBackupIds.length} selected backup${selectedBackupIds.length === 1 ? '' : 's'}`,
+    })
   }
 
   const confirmDeleteBackup = async () => {
@@ -297,16 +321,24 @@ export default function Dashboard() {
     setDeleteError(null)
 
     try {
-      const response = await fetch(`/api/backups/delete?backupId=${encodeURIComponent(pendingDelete.backupId)}`, {
+      const response = await fetch('/api/backups/delete', {
         method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          backupIds: pendingDelete.backupIds,
+        }),
       })
       const result = await response.json()
 
       if (!result.success) {
+        await fetchBackupsSummary()
         throw new Error(result.error || 'Failed to delete backup')
       }
 
       await fetchBackupsSummary()
+      setSelectedBackupIds((prev) => prev.filter((id) => !pendingDelete.backupIds.includes(id)))
       setPendingDelete(null)
       setDeleteError(null)
     } catch (error) {
@@ -351,12 +383,18 @@ export default function Dashboard() {
     if (!file) return
 
     setUploading(true)
+    setUploadProgressPercent(0)
+    setUploadProgressDetail('Preparing upload...')
     setUploadResult(null)
 
     try {
       const data = await uploadTwitterArchiveDirect({
         file,
         username: twitterUsername || undefined,
+        onProgress: (progress: DirectUploadProgress) => {
+          setUploadProgressPercent(progress.percent)
+          setUploadProgressDetail(progress.detail || null)
+        },
       })
       setUploadResult(data as UploadResult)
 
@@ -376,6 +414,8 @@ export default function Dashboard() {
       setUploadResult({ success: false, error: 'Failed to upload archive' })
     } finally {
       setUploading(false)
+      setUploadProgressPercent(0)
+      setUploadProgressDetail(null)
     }
   }
 
@@ -455,6 +495,30 @@ export default function Dashboard() {
   const platformStorageBytes = platformScopedBackups.reduce((sum, backup) => sum + resolveBackupSize(backup), 0)
   const allBackupsEstimatedStorageBytes = allBackups.reduce((sum, backup) => sum + resolveBackupSize(backup), 0)
   const accountStorageBytes = reportedTotalStorageBytes ?? allBackupsEstimatedStorageBytes
+  const inProgressJobs = jobs.filter((job) => job.status === 'queued' || job.status === 'processing')
+  const filteredBackupIdSet = new Set(filteredAllBackups.map((backup) => backup.id))
+  const selectedVisibleCount = selectedBackupIds.filter((id) => filteredBackupIdSet.has(id)).length
+  const allVisibleSelected = filteredAllBackups.length > 0 && selectedVisibleCount === filteredAllBackups.length
+
+  const toggleBackupSelection = (backupId: string) => {
+    setSelectedBackupIds((prev) => {
+      if (prev.includes(backupId)) return prev.filter((id) => id !== backupId)
+      return [...prev, backupId]
+    })
+  }
+
+  const toggleSelectAllVisible = () => {
+    setSelectedBackupIds((prev) => {
+      const visibleIds = filteredAllBackups.map((backup) => backup.id)
+      const prevSet = new Set(prev)
+      const everyVisibleSelected = visibleIds.every((id) => prevSet.has(id))
+      if (everyVisibleSelected) {
+        return prev.filter((id) => !filteredBackupIdSet.has(id))
+      }
+      visibleIds.forEach((id) => prevSet.add(id))
+      return Array.from(prevSet)
+    })
+  }
 
   const renderPlatformIcon = (platformId: PlatformId) => {
     if (platformId === 'twitter') return <XLogo />
@@ -602,6 +666,8 @@ export default function Dashboard() {
               jobs={jobs}
               activeJob={activeJob}
               uploading={uploading}
+              uploadProgressPercent={uploadProgressPercent}
+              uploadProgressDetail={uploadProgressDetail}
               uploadResult={uploadResult}
               scraping={scraping}
               scrapeResult={scrapeResult}
@@ -721,7 +787,89 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <p className="mt-3 text-sm text-blue-100/70">Showing {filteredAllBackups.length} backup{filteredAllBackups.length === 1 ? '' : 's'}.</p>
+              {!loadingBackups && filteredAllBackups.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-[#0a1430] px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={toggleSelectAllVisible}
+                    className="rounded-full border border-white/20 px-3 py-1.5 text-xs font-semibold text-blue-100 hover:bg-white/10"
+                  >
+                    {allVisibleSelected ? 'Unselect visible' : 'Select visible'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBackupIds([])}
+                    disabled={selectedBackupIds.length === 0}
+                    className="rounded-full border border-white/20 px-3 py-1.5 text-xs font-semibold text-blue-100 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Clear selection
+                  </button>
+                  <span className="text-xs text-blue-100/70">
+                    {selectedBackupIds.length} selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelectedBackups}
+                    disabled={selectedBackupIds.length === 0 || deletingBackup}
+                    className="ml-auto rounded-full border border-red-500/50 bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-200 hover:bg-red-500/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Delete selected
+                  </button>
+                </div>
+              )}
+
+              {inProgressJobs.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <p className="text-sm font-medium text-blue-100/80">
+                    In-progress jobs ({inProgressJobs.length})
+                  </p>
+                  {inProgressJobs.map((job) => {
+                    const jobLabel = job.job_type === 'archive_upload' ? 'Archive upload' : 'Snapshot scrape'
+                    const progress = Math.max(0, Math.min(100, Number(job.progress) || 0))
+                    return (
+                      <article
+                        key={job.id}
+                        className="rounded-2xl border border-blue-300/30 bg-blue-500/10 p-4"
+                      >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-white">
+                              {jobLabel} ({job.status === 'queued' ? 'Queued' : 'Processing'})
+                            </p>
+                            <p className="mt-1 text-sm text-blue-100/85">
+                              {job.message || 'Running in the background...'}
+                            </p>
+                            <p className="mt-1 text-xs text-blue-100/65">
+                              Started {formatDate(job.started_at || job.created_at || null)}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              void handleCancelJob(job.id).catch((error) =>
+                                console.error('Cancel backup job error:', error),
+                              )
+                            }}
+                            className="rounded-full border border-red-500/50 bg-red-500/15 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/30"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/15">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-blue-400 to-cyan-300"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+
+              <p className="mt-3 text-sm text-blue-100/70">
+                Showing {filteredAllBackups.length} backup{filteredAllBackups.length === 1 ? '' : 's'}
+                {inProgressJobs.length > 0 ? ` and ${inProgressJobs.length} in-progress job${inProgressJobs.length === 1 ? '' : 's'}.` : '.'}
+              </p>
 
               <div className="mt-4 space-y-3">
                 {loadingBackups ? (
@@ -752,8 +900,17 @@ export default function Dashboard() {
                     return (
                       <article
                         key={backup.id}
-                        className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-[#101b3d] p-4 transition hover:border-white/20 sm:flex-row sm:items-center sm:justify-between"
+                        className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-2xl border border-white/10 bg-[#101b3d] p-4 transition hover:border-white/20 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"
                       >
+                        <div className="self-center">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${methodLabel}`}
+                            checked={selectedBackupIds.includes(backup.id)}
+                            onChange={() => toggleBackupSelection(backup.id)}
+                            className="h-4 w-4 cursor-pointer rounded border-white/30 bg-transparent text-blue-400 focus:ring-blue-400"
+                          />
+                        </div>
                         <div
                           className="flex min-w-0 cursor-pointer items-center gap-4"
                           onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
@@ -786,16 +943,19 @@ export default function Dashboard() {
                           </div>
                         </div>
 
-                        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+                        <div className="col-start-2 flex flex-wrap items-center gap-2 sm:col-start-3 sm:justify-end">
                           <p className="w-full font-mono tabular-nums text-[0.92rem] font-medium text-blue-100/90 sm:mr-2 sm:w-auto">
                             {formatSize(resolveBackupSize(backup))}
                           </p>
-                          <button
-                            onClick={() => router.push(`/dashboard/backup/${backup.id}`)}
-                            className="flex-1 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-200 sm:flex-none"
+                          <a
+                            href={`/dashboard/backup/${backup.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex flex-1 items-center justify-center gap-1 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-200 sm:flex-none"
                           >
                             View
-                          </button>
+                            <ExternalLink size={14} />
+                          </a>
                           <button
                             onClick={() => {
                               void handleDownloadBackup(backup.id)
@@ -847,7 +1007,9 @@ export default function Dashboard() {
       {pendingDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4">
           <div className="w-full max-w-md rounded-3xl border border-white/15 bg-[#101524] p-6 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
-            <h3 className="text-lg font-semibold text-white">Delete Backup</h3>
+            <h3 className="text-lg font-semibold text-white">
+              {pendingDelete.backupIds.length > 1 ? 'Delete Backups' : 'Delete Backup'}
+            </h3>
             <p className="mt-2 text-sm text-gray-300">
               Delete <span className="font-semibold text-white">{pendingDelete.label}</span>? This cannot be undone.
             </p>
@@ -869,7 +1031,9 @@ export default function Dashboard() {
                 disabled={deletingBackup}
                 className="rounded-full border border-red-500/50 bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/30 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {deletingBackup ? 'Deleting...' : 'Delete'}
+                {deletingBackup
+                  ? `Deleting${pendingDelete.backupIds.length > 1 ? ' backups' : ''}...`
+                  : `Delete${pendingDelete.backupIds.length > 1 ? ' all' : ''}`}
               </button>
             </div>
           </div>

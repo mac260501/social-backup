@@ -4,9 +4,11 @@ import {
   createBackupJob,
   findActiveBackupJobForUser,
   markBackupJobFailed,
+  mergeBackupJobPayload,
 } from '@/lib/jobs/backup-jobs'
 import {
   TWITTER_SCRAPE_API_LIMITS,
+  TWITTER_SCRAPE_LIMITS,
   USER_STORAGE_LIMITS,
 } from '@/lib/platforms/twitter/limits'
 import { getTwitterApiUsageSummary } from '@/lib/platforms/twitter/api-usage'
@@ -31,6 +33,13 @@ const DEFAULT_SCRAPE_TARGETS: TwitterScrapeTargets = {
   replies: true,
   followers: true,
   following: true,
+}
+
+function extractInngestEventIds(response: unknown): string[] {
+  if (!response || typeof response !== 'object') return []
+  const ids = (response as { ids?: unknown }).ids
+  if (!Array.isArray(ids)) return []
+  return ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
 }
 
 function formatUsd(value: number): string {
@@ -218,7 +227,13 @@ export async function POST(request: Request) {
       if (explicitTweetLimit !== null) {
         tweetsToScrape = explicitTweetLimit
       } else if (includesSocialGraph) {
-        tweetsToScrape = TWITTER_SCRAPE_API_LIMITS.profileIncludedItems
+        // Keep timeline broad, but avoid starving followers/following budget in mixed runs.
+        const preferredDefaultTweets = Math.max(1, TWITTER_SCRAPE_LIMITS.defaultTweets)
+        const preferredDefaultCostUsd = estimateApifyTimelineCostUsd(preferredDefaultTweets)
+        tweetsToScrape =
+          preferredDefaultCostUsd <= effectiveRunBudgetUsd
+            ? preferredDefaultTweets
+            : maxApifyTimelineItemsForBudget(effectiveRunBudgetUsd)
       } else {
         tweetsToScrape = maxApifyTimelineItemsForBudget(effectiveRunBudgetUsd)
       }
@@ -318,7 +333,7 @@ export async function POST(request: Request) {
     })
 
     try {
-      await inngest.send({
+      const sendResult = await inngest.send({
         name: 'backup/snapshot-scrape.requested',
         data: {
           jobId: job.id,
@@ -346,6 +361,13 @@ export async function POST(request: Request) {
           },
         },
       })
+
+      const eventIds = extractInngestEventIds(sendResult)
+      if (eventIds.length > 0) {
+        await mergeBackupJobPayload(supabase, job.id, {
+          inngest_event_ids: eventIds,
+        })
+      }
     } catch (enqueueError) {
       await markBackupJobFailed(
         supabase,

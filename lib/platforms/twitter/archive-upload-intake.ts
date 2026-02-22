@@ -12,6 +12,13 @@ import { deleteObjectsFromR2, normalizeStoragePath } from '@/lib/storage/r2'
 
 const supabase = createAdminClient()
 
+function extractInngestEventIds(response: unknown): string[] {
+  if (!response || typeof response !== 'object') return []
+  const ids = (response as { ids?: unknown }).ids
+  if (!Array.isArray(ids)) return []
+  return ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+}
+
 export type ArchiveUploadValidationInput = {
   userId: string
   fileName: string
@@ -82,7 +89,12 @@ export async function enqueueArchiveUploadJob(params: {
   })
 
   try {
-    await inngest.send({
+    const eventKey = process.env.INNGEST_EVENT_KEY?.trim()
+    if (!eventKey) {
+      throw new Error('Inngest is not configured. Missing INNGEST_EVENT_KEY.')
+    }
+
+    const sendResult = await inngest.send({
       name: 'backup/archive-upload.requested',
       data: {
         jobId: job.id,
@@ -91,6 +103,13 @@ export async function enqueueArchiveUploadJob(params: {
         inputStoragePath: stagedInputPath,
       },
     })
+
+    const eventIds = extractInngestEventIds(sendResult)
+    if (eventIds.length > 0) {
+      await mergeBackupJobPayload(supabase, job.id, {
+        inngest_event_ids: eventIds,
+      })
+    }
   } catch (enqueueError) {
     await markBackupJobFailed(
       supabase,

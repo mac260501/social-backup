@@ -10,7 +10,10 @@ import { WizardStep1 } from '@/components/archive-wizard/WizardStep1'
 import { WizardStep2 } from '@/components/archive-wizard/WizardStep2'
 import { WizardStep3 } from '@/components/archive-wizard/WizardStep3'
 import { WizardSuccess } from '@/components/archive-wizard/WizardSuccess'
-import { uploadTwitterArchiveDirect } from '@/lib/platforms/twitter/direct-upload'
+import {
+  type DirectUploadProgress,
+  uploadTwitterArchiveDirect,
+} from '@/lib/platforms/twitter/direct-upload'
 import type {
   ArchiveWizardJobSummary,
   ArchiveWizardResolvedStep,
@@ -84,6 +87,8 @@ export default function ArchiveWizardPage() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadProgressPercent, setUploadProgressPercent] = useState(0)
+  const [uploadProgressDetail, setUploadProgressDetail] = useState<string | null>(null)
   const [updatingStepState, setUpdatingStepState] = useState(false)
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -340,6 +345,8 @@ export default function ArchiveWizardPage() {
     }
 
     setUploading(true)
+    setUploadProgressPercent(0)
+    setUploadProgressDetail('Preparing upload...')
     setError(null)
     setUploadMessage(null)
 
@@ -351,6 +358,10 @@ export default function ArchiveWizardPage() {
       const result = (await uploadTwitterArchiveDirect({
         file: selectedFile,
         username: usernameFromMetadata,
+        onProgress: (progress: DirectUploadProgress) => {
+          setUploadProgressPercent(progress.percent)
+          setUploadProgressDetail(progress.detail || null)
+        },
       })) as {
         success?: boolean
         error?: string
@@ -369,6 +380,8 @@ export default function ArchiveWizardPage() {
       setError(uploadError instanceof Error ? uploadError.message : 'Failed to upload archive')
     } finally {
       setUploading(false)
+      setUploadProgressPercent(0)
+      setUploadProgressDetail(null)
     }
   }
 
@@ -443,6 +456,8 @@ export default function ArchiveWizardPage() {
             <WizardStep3
               selectedFile={selectedFile}
               uploading={uploading}
+              uploadProgressPercent={uploadProgressPercent}
+              uploadProgressDetail={uploadProgressDetail}
               activeJob={activeJob}
               uploadMessage={uploadMessage}
               error={error}

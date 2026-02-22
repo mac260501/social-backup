@@ -47,6 +47,8 @@ export interface Tweet {
   retweet_count?: number
   favorite_count?: number
   reply_count?: number
+  is_pinned?: boolean
+  pinned_rank?: number
   type?: string
   in_reply_to_status_id?: string | null
   in_reply_to_user_id?: string | null
@@ -117,6 +119,7 @@ export interface TwitterScrapeResult {
     displayName?: string
     profileFollowersCount?: number
     profileFollowingCount?: number
+    profileStatusesCount?: number
     selected_targets: TwitterScrapeTargets
   }
 }

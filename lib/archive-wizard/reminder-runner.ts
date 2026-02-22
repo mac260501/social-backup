@@ -48,14 +48,36 @@ function toFirstName(displayName: string | null, email: string) {
 }
 
 function normalizeBaseUrl() {
-  const base =
-    process.env.APP_BASE_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.NEXTAUTH_URL ||
-    'http://localhost:3000'
+  const candidates = [
+    process.env.APP_BASE_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.NEXTAUTH_URL,
+  ]
 
-  return base.replace(/\/$/, '')
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const trimmed = candidate.trim()
+    if (!trimmed) continue
+    return trimmed.replace(/\/$/, '')
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Missing app base URL env. Set APP_BASE_URL (or NEXTAUTH_URL / NEXT_PUBLIC_APP_URL / NEXT_PUBLIC_SITE_URL).')
+  }
+
+  return 'http://localhost:3000'
+}
+
+function resolveReminderFromEmail() {
+  const fromEmail = process.env.RESEND_FROM_EMAIL?.trim()
+  if (fromEmail) return fromEmail
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Missing RESEND_FROM_EMAIL environment variable in production.')
+  }
+
+  return 'onboarding@resend.dev'
 }
 
 export async function runArchiveReminderCycle(limit = 500): Promise<ArchiveReminderRunSummary> {
@@ -65,7 +87,7 @@ export async function runArchiveReminderCycle(limit = 500): Promise<ArchiveRemin
   }
 
   const resend = new Resend(resendApiKey)
-  const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
+  const fromEmail = resolveReminderFromEmail()
   const continueUrl = `${normalizeBaseUrl()}/dashboard/archive-wizard?step=2`
 
   const { data: candidates, error: fetchError } = await supabase

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
+import { ExternalLink } from 'lucide-react'
 import { TweetCard } from '@/components/platforms/twitter/backup/TweetCard'
 import { formatPartialReasonLabel, getBackupPartialDetails, isArchiveBackup as isArchiveBackupRecord } from '@/lib/platforms/backup'
 import { buildInternalMediaUrl } from '@/lib/storage/media-url'
@@ -61,6 +62,8 @@ interface BackupProfile {
   following_count?: number | string
   followers?: number | string
   following?: number | string
+  statusesCount?: number | string
+  statuses_count?: number | string
 }
 
 type SnapshotScrapeTargets = {
@@ -121,6 +124,22 @@ function normalizeImageUrl(value: string | null) {
   return buildInternalMediaUrl(value)
 }
 
+function normalizeMediaAssetUrl(value: string | undefined | null) {
+  if (!value) return null
+  const decoded = decodeMediaUrl(value).trim()
+  if (!decoded) return null
+  if (
+    decoded.startsWith('http://')
+    || decoded.startsWith('https://')
+    || decoded.startsWith('data:')
+    || decoded.startsWith('blob:')
+    || decoded.startsWith('/')
+  ) {
+    return decoded
+  }
+  return buildInternalMediaUrl(decoded)
+}
+
 function decodeMediaUrl(url: string) {
   return url.replace(/&amp;/g, '&')
 }
@@ -174,6 +193,19 @@ function extractUserIdFromIntentUrl(url?: string) {
   return m?.[1] || ''
 }
 
+function formatCompactUserId(userId?: string | null): string {
+  const normalized = (userId || '').trim()
+  if (!normalized) return ''
+  if (normalized.length <= 10) return normalized
+  return `${normalized.slice(0, 4)}...${normalized.slice(-4)}`
+}
+
+function formatArchiveUserLabel(userId?: string | null): string {
+  const compact = formatCompactUserId(userId)
+  if (!compact) return 'Archived user'
+  return `Archived user ${compact}`
+}
+
 function parseSnapshotTargets(value: unknown): SnapshotScrapeTargets | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const source = value as Record<string, unknown>
@@ -220,6 +252,84 @@ function dedupeTweetItems(items: unknown[]): unknown[] {
   }
 
   return deduped
+}
+
+function readBooleanLike(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    return normalized === 'true' || normalized === '1'
+  }
+  return false
+}
+
+function readNumberLike(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function getTweetPinnedRank(item: unknown): number | null {
+  if (!item || typeof item !== 'object') return null
+  const tweet = item as Record<string, unknown>
+  return readNumberLike(tweet.pinned_rank)
+}
+
+function isPinnedTweetItem(item: unknown): boolean {
+  if (!item || typeof item !== 'object') return false
+  const tweet = item as Record<string, unknown>
+  if (readBooleanLike(tweet.is_pinned)) return true
+  return getTweetPinnedRank(tweet) !== null
+}
+
+function getTweetTimestamp(item: unknown): number {
+  if (!item || typeof item !== 'object') return 0
+  const tweet = item as Record<string, unknown>
+  const raw = typeof tweet.created_at === 'string' ? tweet.created_at : ''
+  if (!raw) return 0
+  const parsed = new Date(raw).getTime()
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function sortPostsWithPinnedFirst(items: unknown[]): unknown[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const aPinned = isPinnedTweetItem(a.item)
+      const bPinned = isPinnedTweetItem(b.item)
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
+
+      if (aPinned && bPinned) {
+        const aRank = getTweetPinnedRank(a.item)
+        const bRank = getTweetPinnedRank(b.item)
+        if (aRank !== null && bRank !== null && aRank !== bRank) return aRank - bRank
+        if (aRank !== null && bRank === null) return -1
+        if (aRank === null && bRank !== null) return 1
+      }
+
+      const aTime = getTweetTimestamp(a.item)
+      const bTime = getTweetTimestamp(b.item)
+      if (aTime !== bTime) return bTime - aTime
+
+      return a.index - b.index
+    })
+    .map((entry) => entry.item)
+}
+
+function sortTweetsByNewest(items: unknown[]): unknown[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const aTime = getTweetTimestamp(a.item)
+      const bTime = getTweetTimestamp(b.item)
+      if (aTime !== bTime) return bTime - aTime
+      return a.index - b.index
+    })
+    .map((entry) => entry.item)
 }
 
 export function BackupViewer({ backup }: BackupViewerProps) {
@@ -419,14 +529,20 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     return `Snapshot @${username}`
   }, [isArchiveBackup, username])
 
-  const postItems = tweets
-  const replyItems =
-    replies.length > 0
-      ? replies
-      : tweets.filter((tweet) => {
-          const t = tweet as Record<string, unknown>
-          return Boolean(t.in_reply_to_status_id || t.in_reply_to_user_id || t.in_reply_to_screen_name)
-        })
+  const postItems = useMemo(
+    () => sortPostsWithPinnedFirst(tweets),
+    [tweets],
+  )
+  const replyItems = useMemo(() => {
+    const source =
+      replies.length > 0
+        ? replies
+        : tweets.filter((tweet) => {
+            const t = tweet as Record<string, unknown>
+            return Boolean(t.in_reply_to_status_id || t.in_reply_to_user_id || t.in_reply_to_screen_name)
+          })
+    return sortTweetsByNewest(source)
+  }, [replies, tweets])
   const timelineMediaSource = useMemo(
     () => (replies.length > 0 ? [...tweets, ...replies] : tweets),
     [replies, tweets],
@@ -470,10 +586,10 @@ export function BackupViewer({ backup }: BackupViewerProps) {
         const mediaUrlHttpsRaw = mediaItem.media_url_https as string | undefined
         const mediaUrlRawValue = mediaItem.media_url as string | undefined
         const fallbackImageUrlRaw = mediaUrlHttpsRaw || mediaUrlRawValue
-        const fallbackImageUrl = fallbackImageUrlRaw ? decodeMediaUrl(fallbackImageUrlRaw) : undefined
+        const fallbackImageUrl = normalizeMediaAssetUrl(fallbackImageUrlRaw) || undefined
 
-        const normalizedMediaUrl = mediaUrlRawValue ? decodeMediaUrl(mediaUrlRawValue) : undefined
-        const normalizedMediaUrlHttps = mediaUrlHttpsRaw ? decodeMediaUrl(mediaUrlHttpsRaw) : undefined
+        const normalizedMediaUrl = normalizeMediaAssetUrl(mediaUrlRawValue)
+        const normalizedMediaUrlHttps = normalizeMediaAssetUrl(mediaUrlHttpsRaw)
         const normalizedShortUrl = typeof mediaItem.url === 'string' ? decodeMediaUrl(mediaItem.url) : undefined
         const derivedGifVideo = type === 'animated_gif' ? deriveGifVideoUrl(normalizedMediaUrlHttps || normalizedMediaUrl) : null
 
@@ -495,7 +611,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
           )
           const sortedVariants = mp4Variants
             .sort((a, b) => Number((b.bitrate as number | undefined) || 0) - Number((a.bitrate as number | undefined) || 0))
-            .map((v) => (typeof v.url === 'string' ? decodeMediaUrl(v.url) : ''))
+            .map((v) => (typeof v.url === 'string' ? normalizeMediaAssetUrl(v.url) || '' : ''))
             .filter(Boolean)
           variantUrls = sortedVariants.length > 0 ? sortedVariants : undefined
           const bestVariant = sortedVariants[0]
@@ -503,7 +619,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
             mediaUrlRaw = bestVariant
           }
           if (type === 'animated_gif') {
-            const gifSource = fallbackImageUrlRaw ? decodeMediaUrl(fallbackImageUrlRaw) : null
+            const gifSource = normalizeMediaAssetUrl(fallbackImageUrlRaw)
             if (gifSource && isGifUrl(gifSource)) {
               variantUrls = [gifSource, ...(variantUrls || [])]
               if (!bestVariant) mediaUrlRaw = gifSource
@@ -622,7 +738,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
       if (!map.has(conversationId)) {
         const parts = conversationId.includes('-') ? conversationId.split('-') : []
         const participantIdGuess = parts.find((part) => part !== ownerDmId) || parts[0] || 'unknown'
-        const participantName = participantIdGuess !== 'unknown' ? `User ${participantIdGuess}` : 'Unknown'
+        const participantName = participantIdGuess !== 'unknown' ? formatArchiveUserLabel(participantIdGuess) : 'Archived user'
         map.set(conversationId, {
           id: conversationId,
           participantId: participantIdGuess,
@@ -681,11 +797,11 @@ export function BackupViewer({ backup }: BackupViewerProps) {
 
         if (senderId && senderId !== ownerDmId) {
           conversation.participantId = senderId
-          conversation.participantName = `User ${senderId}`
+          conversation.participantName = formatArchiveUserLabel(senderId)
           conversation.profileUrl = `https://twitter.com/intent/user?user_id=${senderId}`
         } else if (recipientId && recipientId !== ownerDmId) {
           conversation.participantId = recipientId
-          conversation.participantName = `User ${recipientId}`
+          conversation.participantName = formatArchiveUserLabel(recipientId)
           conversation.profileUrl = `https://twitter.com/intent/user?user_id=${recipientId}`
         }
       })
@@ -747,13 +863,6 @@ export function BackupViewer({ backup }: BackupViewerProps) {
       (followingObj.userLink as string | undefined) ||
       (userId ? `https://twitter.com/intent/user?user_id=${userId}` : '')
 
-    const name =
-      (p.accountDisplayName as string | undefined) ||
-      (p.name as string | undefined) ||
-      (followerObj.name as string | undefined) ||
-      (followingObj.name as string | undefined) ||
-      (p.displayName as string | undefined) ||
-      (userId ? `User ${userId}` : 'Unknown')
     const username =
       (p.username as string | undefined) ||
       (p.screen_name as string | undefined) ||
@@ -761,6 +870,13 @@ export function BackupViewer({ backup }: BackupViewerProps) {
       (followerObj.username as string | undefined) ||
       (followingObj.username as string | undefined) ||
       extractUsernameFromUrl(rawUserLink)
+    const name =
+      (p.accountDisplayName as string | undefined) ||
+      (p.name as string | undefined) ||
+      (followerObj.name as string | undefined) ||
+      (followingObj.name as string | undefined) ||
+      (p.displayName as string | undefined) ||
+      (username ? `@${username}` : formatArchiveUserLabel(userId))
     const bio = (p.bio as string | undefined) || (p.description as string | undefined) || ''
     const avatar = (p.profileImageUrl as string | undefined) || (p.profile_image_url_https as string | undefined) || null
     const profileUrl = username ? `https://x.com/${username}` : userId ? `https://twitter.com/intent/user?user_id=${userId}` : '#'
@@ -881,7 +997,9 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                                       : ''}
                                   </span>
                                 </div>
-                                <p className="truncate text-sm text-gray-400">id:{conversation.participantId}</p>
+                                <p className="mt-0.5 truncate text-sm text-gray-400" title={conversation.participantId ? `id:${conversation.participantId}` : undefined}>
+                                  {conversation.participantId ? `id:${formatCompactUserId(conversation.participantId)}` : 'id:unknown'}
+                                </p>
                                 <p className="mt-1 truncate text-sm text-gray-500">{lastMessage?.text || 'Media'}</p>
                               </div>
                             </div>
@@ -906,9 +1024,10 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                           href={selectedConversation.profileUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-xl font-semibold text-white hover:underline"
+                          className="inline-flex items-center gap-1 text-xl font-semibold text-white hover:underline"
                         >
                           {selectedConversation.participantName}
+                          <ExternalLink size={16} />
                         </a>
                         <button type="button" className="rounded-full p-2 hover:bg-white/10">
                           <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1125,6 +1244,14 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                                 unoptimized
                                 sizes="(max-width: 768px) 33vw, 220px"
                                 className="object-cover"
+                                onError={(e) => {
+                                  const current = e.currentTarget as HTMLImageElement
+                                  if (media.fallbackImageUrl && current.src !== media.fallbackImageUrl) {
+                                    current.src = media.fallbackImageUrl
+                                    return
+                                  }
+                                  current.style.display = 'none'
+                                }}
                               />
                             ) : (
                               <>
@@ -1482,20 +1609,27 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-xl font-bold leading-none">{p.name}</p>
                         <p className="mt-1 truncate text-lg leading-none text-gray-400">
-                          {p.username ? `@${p.username}` : p.userId ? `id:${p.userId}` : '@unknown'}
+                          {p.username ? `@${p.username}` : p.userId ? `id:${formatCompactUserId(p.userId)}` : '@unknown'}
                         </p>
                         {p.bio && <p className="mt-3 text-lg leading-tight text-gray-200">{p.bio}</p>}
                       </div>
-                      <button
-                        type="button"
-                        className={`self-start rounded-full px-6 py-2 text-base font-semibold ${
-                          activePeopleTab === 'following'
-                            ? 'border border-gray-500 text-white'
-                            : 'bg-white text-black'
-                        }`}
-                      >
-                        {actionLabel}
-                      </button>
+                      <div className="flex items-center gap-2 self-start">
+                        <span
+                          className={`rounded-full px-6 py-2 text-base font-semibold ${
+                            activePeopleTab === 'following'
+                              ? 'border border-gray-500 text-white'
+                              : 'bg-white text-black'
+                          }`}
+                        >
+                          {actionLabel}
+                        </span>
+                        <span
+                          className="rounded-full border border-white/20 p-2 text-gray-300"
+                          title="Open profile in new tab"
+                        >
+                          <ExternalLink size={14} />
+                        </span>
+                      </div>
                     </a>
                   )
                 })

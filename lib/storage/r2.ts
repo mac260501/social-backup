@@ -1,10 +1,14 @@
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
@@ -20,6 +24,11 @@ type UploadObjectInput = {
 export type R2ObjectMetadata = {
   contentLength: number | null
   contentType: string | null
+}
+
+export type MultipartUploadPart = {
+  partNumber: number
+  etag: string
 }
 
 function readEnv(name: string): string {
@@ -271,6 +280,105 @@ export async function createSignedPutUrl(
   })
 
   return getSignedUrl(client, command, { expiresIn: expiresInSeconds })
+}
+
+export async function createMultipartUpload(
+  key: string,
+  options?: {
+    contentType?: string
+  },
+): Promise<{ uploadId: string; key: string }> {
+  const client = getR2Client()
+  const { bucket } = getR2Config()
+  const normalizedKey = normalizeStoragePath(key)
+
+  const response = await client.send(
+    new CreateMultipartUploadCommand({
+      Bucket: bucket,
+      Key: normalizedKey,
+      ContentType: options?.contentType,
+    }),
+  )
+
+  if (!response.UploadId) {
+    throw new Error('Failed to initiate multipart upload')
+  }
+
+  return {
+    uploadId: response.UploadId,
+    key: normalizedKey,
+  }
+}
+
+export async function createSignedUploadPartUrl(
+  key: string,
+  options: {
+    uploadId: string
+    partNumber: number
+    expiresInSeconds?: number
+  },
+): Promise<string> {
+  const client = getR2Client()
+  const { bucket } = getR2Config()
+  const normalizedKey = normalizeStoragePath(key)
+  const expiresInSeconds = Math.max(1, options.expiresInSeconds || DEFAULT_SIGNED_URL_TTL_SECONDS)
+
+  const command = new UploadPartCommand({
+    Bucket: bucket,
+    Key: normalizedKey,
+    UploadId: options.uploadId,
+    PartNumber: options.partNumber,
+  })
+
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds })
+}
+
+export async function completeMultipartUpload(
+  key: string,
+  options: {
+    uploadId: string
+    parts: MultipartUploadPart[]
+  },
+): Promise<void> {
+  const client = getR2Client()
+  const { bucket } = getR2Config()
+  const normalizedKey = normalizeStoragePath(key)
+  const sortedParts = [...options.parts]
+    .sort((a, b) => a.partNumber - b.partNumber)
+    .map((part) => ({
+      ETag: part.etag,
+      PartNumber: part.partNumber,
+    }))
+
+  await client.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: bucket,
+      Key: normalizedKey,
+      UploadId: options.uploadId,
+      MultipartUpload: {
+        Parts: sortedParts,
+      },
+    }),
+  )
+}
+
+export async function abortMultipartUpload(
+  key: string,
+  options: {
+    uploadId: string
+  },
+): Promise<void> {
+  const client = getR2Client()
+  const { bucket } = getR2Config()
+  const normalizedKey = normalizeStoragePath(key)
+
+  await client.send(
+    new AbortMultipartUploadCommand({
+      Bucket: bucket,
+      Key: normalizedKey,
+      UploadId: options.uploadId,
+    }),
+  )
 }
 
 export function parseLegacyStoragePath(candidate: string): string | null {

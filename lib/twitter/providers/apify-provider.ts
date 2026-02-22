@@ -23,6 +23,7 @@ type ProfileMetadata = {
   displayName?: string
   followersCount?: number
   followingCount?: number
+  statusesCount?: number
 }
 
 type TimelineScrape = {
@@ -92,12 +93,14 @@ type SocialGraphProgress = {
 /**
  * Apify Twitter Scraper Provider
  * Uses:
- * - apidojo/twitter-profile-scraper (profile, tweets, replies)
+ * - apidojo/tweet-scraper (profile timeline + with_replies timeline)
+ * - apidojo/twitter-scraper-lite (targeted pinned tweet recovery by status URL)
  * - apidojo/twitter-user-scraper (followers, following)
  */
 export class ApifyProvider implements TwitterProvider {
   private apiKey: string
-  private profileActorId = 'apidojo/twitter-profile-scraper'
+  private profileActorId = 'apidojo/tweet-scraper'
+  private pinnedTweetActorId = 'apidojo/twitter-scraper-lite'
   private userActorId = 'apidojo/twitter-user-scraper'
   private client: ApifyClient
 
@@ -277,12 +280,14 @@ export class ApifyProvider implements TwitterProvider {
     const socialGraphCapHit = typeof socialGraphMaxItems === 'number' && socialGraphMaxItems > 0
       ? socialGraphItemCount >= socialGraphMaxItems
       : false
-    const timelineLimitHit = timelineRequested && maxTweets > 0
-      ? timelineItemCount >= maxTweets
-      : false
+    const timelineSourceTotal = this.readOptionalCount(profile.statusesCount) ?? 0
+    const timelineSourceGap =
+      timelineRequested
+      && timelineSourceTotal > 0
+      && timelineReturned < timelineSourceTotal
     const partialReasons: string[] = []
-    if (timelineLimitHit) partialReasons.push('timeline_limit_reached')
     if (socialGraphCapHit) partialReasons.push('social_graph_budget_cap_reached')
+    if (timelineSourceGap) partialReasons.push('timeline_source_gap')
 
     await emitProgress({
       phase: 'complete',
@@ -326,7 +331,7 @@ export class ApifyProvider implements TwitterProvider {
         scraped_at: new Date().toISOString(),
         is_partial: partialReasons.length > 0,
         partial_reasons: partialReasons,
-        timeline_limit_hit: timelineLimitHit,
+        timeline_limit_hit: false,
         social_graph_limit_hit: socialGraphCapHit,
         tweets_requested: timelineRequested ? maxTweets : 0,
         tweets_received: timelineReturned,
@@ -335,6 +340,7 @@ export class ApifyProvider implements TwitterProvider {
         displayName,
         profileFollowersCount: profile.followersCount,
         profileFollowingCount: profile.followingCount,
+        profileStatusesCount: profile.statusesCount,
         selected_targets: targets,
       },
     }
@@ -373,7 +379,21 @@ export class ApifyProvider implements TwitterProvider {
       const run = await this.client.actor(this.profileActorId).start(
         {
           twitterHandles: [username],
+          startUrls: [
+            `https://twitter.com/${username}`,
+            `https://twitter.com/${username}/with_replies`,
+          ],
           maxItems: Math.max(1, maxItems),
+          sort: 'Latest',
+          includeSearchTerms: false,
+          onlyImage: false,
+          onlyQuote: false,
+          onlyTwitterBlue: false,
+          onlyVerifiedUsers: false,
+          onlyVideo: false,
+          // Include reposts/retweets in timeline output. This improves parity with X's
+          // profile status count and keeps timeline context.
+          includeNativeRetweets: true,
         },
         this.buildRunWebhooks(apifyWebhook, 'timeline'),
       )
@@ -394,6 +414,7 @@ export class ApifyProvider implements TwitterProvider {
       const tweets: Tweet[] = []
       const replies: Tweet[] = []
       const seenTweetIds = new Set<string>()
+      const requestedHandle = this.normalizeHandle(username)
       let processedItems = 0
       let nextEmitAt = PROGRESS_UPDATE_ITEM_INTERVAL
       let hasInitialProgressEmission = false
@@ -407,6 +428,16 @@ export class ApifyProvider implements TwitterProvider {
           for (const item of batch) {
             normalizedItems.push(item)
             processedItems += 1
+
+            const author = (item.author as Record<string, unknown> | undefined) || {}
+            const itemAuthorHandle = this.normalizeHandle(
+              (author.userName as string | undefined)
+                || (author.username as string | undefined)
+                || (item.userName as string | undefined),
+            )
+            if (itemAuthorHandle && itemAuthorHandle !== requestedHandle) {
+              continue
+            }
 
             const mapped = this.mapTimelineItem(item, username)
             if (!mapped.id || seenTweetIds.has(mapped.id)) continue
@@ -442,6 +473,47 @@ export class ApifyProvider implements TwitterProvider {
         throw new Error(`Apify profile scraper finished with status ${polled.finalStatus}.`)
       }
 
+      const pinnedTweetIds = this.extractPinnedTweetIds(normalizedItems)
+      const pinnedTweetRankById = new Map<string, number>()
+      pinnedTweetIds.forEach((id, index) => {
+        pinnedTweetRankById.set(id, index)
+      })
+      const missingPinnedTweetIds = pinnedTweetIds.filter((id) => !seenTweetIds.has(id))
+      if (missingPinnedTweetIds.length > 0) {
+        try {
+          const pinnedItems = await this.fetchPinnedTweetsById(username, missingPinnedTweetIds, shouldCancel)
+          for (const item of pinnedItems) {
+            normalizedItems.push(item)
+            processedItems += 1
+
+            const author = (item.author as Record<string, unknown> | undefined) || {}
+            const itemAuthorHandle = this.normalizeHandle(
+              (author.userName as string | undefined)
+                || (author.username as string | undefined)
+                || (item.userName as string | undefined),
+            )
+            if (itemAuthorHandle && itemAuthorHandle !== requestedHandle) {
+              continue
+            }
+
+            const mapped = this.mapTimelineItem(item, username, pinnedTweetRankById)
+            if (!mapped.id || seenTweetIds.has(mapped.id)) continue
+            seenTweetIds.add(mapped.id)
+            if (this.isReplyItem(item, mapped)) {
+              replies.push(mapped)
+            } else {
+              tweets.push(mapped)
+            }
+          }
+          console.log(`[Apify] Recovered ${missingPinnedTweetIds.length} pinned tweet(s) via targeted fetch.`)
+        } catch (recoveryError) {
+          if (recoveryError instanceof RunCancelledError) {
+            throw recoveryError
+          }
+          console.warn('[Apify] Failed to recover pinned tweets:', recoveryError)
+        }
+      }
+
       if (onProgress && processedItems > 0) {
         await onProgress({
           tweets: tweets.length,
@@ -451,7 +523,7 @@ export class ApifyProvider implements TwitterProvider {
       }
 
       return {
-        tweets,
+        tweets: this.sortTimelineTweets(tweets),
         replies,
         profile: this.extractProfileMetadata(normalizedItems, username),
         totalItems: normalizedItems.length,
@@ -484,7 +556,8 @@ export class ApifyProvider implements TwitterProvider {
         getFollowers: targets.followers,
         getFollowing: targets.following,
         getRetweeters: false,
-        includeUnavailableUsers: false,
+        // Include suspended/unavailable users so counts better match source totals.
+        includeUnavailableUsers: true,
       }
       if (typeof maxItems === 'number' && Number.isFinite(maxItems) && maxItems > 0) {
         actorInput.maxItems = Math.floor(maxItems)
@@ -652,7 +725,11 @@ export class ApifyProvider implements TwitterProvider {
     }
   }
 
-  private mapTimelineItem(item: Record<string, unknown>, fallbackUsername: string): Tweet {
+  private mapTimelineItem(
+    item: Record<string, unknown>,
+    fallbackUsername: string,
+    pinnedTweetRankById?: Map<string, number>,
+  ): Tweet {
     const author = (item.author as Record<string, unknown> | undefined) || {}
     const authorUsername =
       (author.userName as string | undefined) ||
@@ -667,18 +744,27 @@ export class ApifyProvider implements TwitterProvider {
       (author.profile_image_url as string | undefined)
 
     const media = this.extractMedia(item)
-    const itemUrl = (item.url as string | undefined) || `https://x.com/${authorUsername}/status/${String(item.id || '')}`
+    const tweetId = String(item.id || item.id_str || '')
+    const itemUrl = (item.url as string | undefined) || `https://x.com/${authorUsername}/status/${tweetId}`
+    const authorPinnedTweetIds = Array.isArray(author.pinnedTweetIds) ? author.pinnedTweetIds : []
+    const pinnedRankFromAuthor = authorPinnedTweetIds.findIndex((pinnedId) => String(pinnedId).trim() === tweetId)
+    const pinnedRankFromMap = tweetId ? pinnedTweetRankById?.get(tweetId) : undefined
+    const pinnedRank = pinnedRankFromMap ?? (pinnedRankFromAuthor >= 0 ? pinnedRankFromAuthor : undefined)
+    const isPinned = item.isPinned === true || pinnedRank !== undefined
 
     return {
-      id: String(item.id || item.id_str || ''),
+      id: tweetId,
       text: String(item.text || item.fullText || ''),
       created_at: String(item.createdAt || item.created_at || ''),
       retweet_count: this.asNumber(item.retweetCount ?? item.retweet_count),
       favorite_count: this.asNumber(item.likeCount ?? item.favorite_count),
       reply_count: this.asNumber(item.replyCount ?? item.reply_count),
+      is_pinned: isPinned || undefined,
+      pinned_rank: pinnedRank,
       type: typeof item.type === 'string' ? item.type : undefined,
       in_reply_to_status_id: this.asNullableString(
         item.inReplyToStatusId ??
+          item.inReplyToId ??
           item.in_reply_to_status_id ??
           item.in_reply_to_status_id_str,
       ),
@@ -689,6 +775,7 @@ export class ApifyProvider implements TwitterProvider {
       ),
       in_reply_to_screen_name: this.asNullableString(
         item.inReplyToUser ??
+          item.inReplyToUsername ??
           item.in_reply_to_screen_name,
       ),
       tweet_url: itemUrl,
@@ -699,6 +786,30 @@ export class ApifyProvider implements TwitterProvider {
       },
       media: media.length > 0 ? media : undefined,
     }
+  }
+
+  private sortTimelineTweets(tweets: Tweet[]): Tweet[] {
+    const sorted = [...tweets]
+    sorted.sort((a, b) => {
+      const aPinned = Boolean(a.is_pinned)
+      const bPinned = Boolean(b.is_pinned)
+      if (aPinned !== bPinned) return aPinned ? -1 : 1
+
+      if (aPinned && bPinned) {
+        const aRank = typeof a.pinned_rank === 'number' ? a.pinned_rank : Number.MAX_SAFE_INTEGER
+        const bRank = typeof b.pinned_rank === 'number' ? b.pinned_rank : Number.MAX_SAFE_INTEGER
+        if (aRank !== bRank) return aRank - bRank
+      }
+
+      const aTime = new Date(a.created_at || '').getTime()
+      const bTime = new Date(b.created_at || '').getTime()
+      if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) {
+        return bTime - aTime
+      }
+
+      return 0
+    })
+    return sorted
   }
 
   private extractMedia(item: Record<string, unknown>): TweetMedia[] {
@@ -762,11 +873,9 @@ export class ApifyProvider implements TwitterProvider {
 
   private isReplyItem(item: Record<string, unknown>, mappedTweet: Tweet): boolean {
     if (item.type === 'reply' || item.isReply === true) return true
-    return Boolean(
-      mappedTweet.in_reply_to_status_id ||
-      mappedTweet.in_reply_to_user_id ||
-      mappedTweet.in_reply_to_screen_name,
-    )
+    // Keep classification conservative to avoid normal posts being bucketed as replies
+    // when providers include loose in-reply metadata fields.
+    return Boolean(mappedTweet.in_reply_to_status_id)
   }
 
   private extractProfileMetadata(items: Record<string, unknown>[], fallbackUsername: string): ProfileMetadata {
@@ -806,7 +915,66 @@ export class ApifyProvider implements TwitterProvider {
           author.following ??
           author.friends,
       ),
+      statusesCount: this.readOptionalCount(
+        author.statusesCount ??
+          author.statuses_count ??
+          author.tweetsCount ??
+          author.tweets_count,
+      ),
     }
+  }
+
+  private extractPinnedTweetIds(items: Record<string, unknown>[]): string[] {
+    const pinnedIds = new Set<string>()
+    for (const item of items) {
+      const author = (item.author as Record<string, unknown> | undefined) || {}
+      const rawIds = author.pinnedTweetIds
+      if (!Array.isArray(rawIds)) continue
+      for (const rawId of rawIds) {
+        if (typeof rawId !== 'string' && typeof rawId !== 'number') continue
+        const normalized = String(rawId).trim()
+        if (!normalized) continue
+        pinnedIds.add(normalized)
+      }
+    }
+    return Array.from(pinnedIds)
+  }
+
+  private async fetchPinnedTweetsById(
+    username: string,
+    tweetIds: string[],
+    shouldCancel?: () => Promise<boolean> | boolean,
+  ): Promise<Record<string, unknown>[]> {
+    if (tweetIds.length === 0) return []
+
+    if (shouldCancel) {
+      const cancelled = await shouldCancel()
+      if (cancelled) throw new RunCancelledError()
+    }
+
+    const requestedIds = new Set(tweetIds.map((id) => id.trim()).filter(Boolean))
+    if (requestedIds.size === 0) return []
+
+    const startUrls = Array.from(requestedIds).map((id) => `https://twitter.com/${username}/status/${id}`)
+    const maxItems = Math.max(20, startUrls.length * 10)
+
+    const run = await this.client.actor(this.pinnedTweetActorId).call({
+      startUrls,
+      maxItems: Math.max(maxItems, startUrls.length),
+      sort: 'Latest',
+      includeSearchTerms: false,
+    }, { waitSecs: 120 })
+
+    if (!run.defaultDatasetId) return []
+
+    const dataset = this.client.dataset(run.defaultDatasetId)
+    const { items } = await dataset.listItems({ limit: Math.max(100, startUrls.length * 25) })
+    const normalizedItems = (items || []) as Record<string, unknown>[]
+
+    return normalizedItems.filter((item) => {
+      const id = String(item.id || item.id_str || '').trim()
+      return Boolean(id && requestedIds.has(id))
+    })
   }
 
   private extractUsersByRelation(items: Record<string, unknown>[], includeCandidate: (item: Record<string, unknown>) => boolean): SocialUser[] {
@@ -912,6 +1080,12 @@ export class ApifyProvider implements TwitterProvider {
         username,
       followersCount: this.readOptionalCount(owner.followers),
       followingCount: this.readOptionalCount(owner.following),
+      statusesCount: this.readOptionalCount(
+        owner.statusesCount ??
+          owner.statuses_count ??
+          owner.tweetsCount ??
+          owner.tweets_count,
+      ),
     }
   }
 

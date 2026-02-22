@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient as createServerClient } from '@/lib/supabase/server'
-import { listBackupJobsForUser } from '@/lib/jobs/backup-jobs'
+import { findActiveBackupJobForUser, listBackupJobsForUser } from '@/lib/jobs/backup-jobs'
 import { USER_STORAGE_LIMITS } from '@/lib/platforms/twitter/limits'
 import { getTwitterApiUsageSummary } from '@/lib/platforms/twitter/api-usage'
 import { calculateUserStorageSummary } from '@/lib/storage/usage'
@@ -46,6 +46,9 @@ export async function GET(request: Request) {
         error: 'Forbidden - you can only access your own backups'
       }, { status: 403 })
     }
+
+    // Reconcile stale queued jobs before loading dashboard payload.
+    await findActiveBackupJobForUser(supabase, user.id)
 
     const [{ data, error }, jobs, storageSummary, apiUsage] = await Promise.all([
       supabase

@@ -22,7 +22,9 @@ function statusForArchiveError(message: string): number {
   if (message.includes('size limit')) return 413
   if (message.includes('Storage limit exceeded')) return 413
   if (message.includes('Invalid staged upload path')) return 400
-  if (message.includes('not found')) return 404
+  if (message.includes('Uploaded file not found')) return 404
+  if (message.includes('Inngest API Error')) return 502
+  if (message.includes('Inngest is not configured')) return 502
   if (message.includes('Unauthorized')) return 401
   return 500
 }

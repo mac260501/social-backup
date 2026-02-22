@@ -40,16 +40,216 @@ type MediaMetadataRecord = {
   media_type: string
 }
 
-function parseTwitterJSON(content: string) {
-  const jsonMatch = content.match(/=\s*(\[[\s\S]*\])/)?.[1]
-  if (jsonMatch) {
-    try {
-      return JSON.parse(jsonMatch)
-    } catch (e) {
-      console.error('Failed to parse JSON:', e)
-      return []
+type ArchiveMetadataBucket =
+  | 'account'
+  | 'tweets'
+  | 'followers'
+  | 'following'
+  | 'likes'
+  | 'directMessages'
+
+const ARCHIVE_METADATA_FILE_PATTERNS: Record<ArchiveMetadataBucket, RegExp[]> = {
+  account: [/^data\/account(?:-part\d+)?\.js$/i],
+  tweets: [/^data\/tweets?(?:-part\d+)?\.js$/i],
+  followers: [/^data\/followers?(?:-part\d+)?\.js$/i],
+  following: [/^data\/following(?:-part\d+)?\.js$/i],
+  likes: [/^data\/likes?(?:-part\d+)?\.js$/i],
+  directMessages: [
+    /^data\/direct-messages(?:-part\d+)?\.js$/i,
+    /^data\/direct_messages(?:-part\d+)?\.js$/i,
+  ],
+}
+
+function normalizeZipEntryName(fileName: string): string {
+  return fileName.replace(/\\/g, '/').replace(/^\.\//, '').trim()
+}
+
+function toArchiveRelativePath(fileName: string): string {
+  const normalized = normalizeZipEntryName(fileName)
+  const dataIndex = normalized.toLowerCase().indexOf('data/')
+  if (dataIndex < 0) return normalized
+  return normalized.slice(dataIndex)
+}
+
+function extractPartNumber(fileName: string): number {
+  const match = /-part(\d+)\.js$/i.exec(fileName)
+  if (!match) return 0
+  return Number.parseInt(match[1], 10) || 0
+}
+
+function findMetadataEntries(entries: any[], patterns: RegExp[]): any[] {
+  return entries
+    .filter((entry: any) => {
+      if (!entry || typeof entry.fileName !== 'string') return false
+      const relativePath = toArchiveRelativePath(entry.fileName)
+      return patterns.some((pattern) => pattern.test(relativePath))
+    })
+    .sort((a: any, b: any) => {
+      const relA = toArchiveRelativePath(a.fileName)
+      const relB = toArchiveRelativePath(b.fileName)
+      const partA = extractPartNumber(relA)
+      const partB = extractPartNumber(relB)
+      if (partA !== partB) return partA - partB
+      return relA.localeCompare(relB)
+    })
+}
+
+function extractJsonLiteral(content: string, startIndex: number): { value: string; endIndex: number } | null {
+  const opening = content[startIndex]
+  if (opening !== '[' && opening !== '{') return null
+
+  const stack: string[] = [opening]
+  let inString = false
+  let escaped = false
+
+  for (let i = startIndex + 1; i < content.length; i += 1) {
+    const char = content[i]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      continue
+    }
+
+    if (char === '[' || char === '{') {
+      stack.push(char)
+      continue
+    }
+
+    if (char === ']' || char === '}') {
+      const expected = char === ']' ? '[' : '{'
+      const top = stack[stack.length - 1]
+      if (top !== expected) continue
+      stack.pop()
+      if (stack.length === 0) {
+        return {
+          value: content.slice(startIndex, i + 1),
+          endIndex: i,
+        }
+      }
     }
   }
+
+  return null
+}
+
+function isMissingColumnError(error: unknown, columnName?: string): boolean {
+  if (!error || typeof error !== 'object') return false
+  const code = (error as { code?: unknown }).code
+  const message = String((error as { message?: unknown }).message || '')
+  const normalizedMessage = message.toLowerCase()
+  const normalizedCode = typeof code === 'string' ? code.toUpperCase() : ''
+
+  const isPostgresMissingColumn =
+    normalizedCode === '42703' || /column .* does not exist/i.test(message)
+
+  const isPostgrestMissingColumn =
+    normalizedCode.startsWith('PGRST') &&
+    normalizedMessage.includes('could not find') &&
+    normalizedMessage.includes('column')
+
+  if (!isPostgresMissingColumn && !isPostgrestMissingColumn) {
+    return false
+  }
+  if (!columnName) return true
+  return normalizedMessage.includes(columnName.toLowerCase())
+}
+
+async function insertMediaFileRecord(record: MediaMetadataRecord): Promise<boolean> {
+  const basePayload = {
+    user_id: record.user_id,
+    backup_id: record.backup_id,
+    file_path: record.file_path,
+    file_name: record.file_name,
+    file_size: record.file_size,
+  }
+
+  const attempts: Array<Record<string, unknown>> = [
+    { ...basePayload, mime_type: record.mime_type, media_type: record.media_type },
+    { ...basePayload, mime_type: record.mime_type },
+    { ...basePayload, file_type: record.mime_type, media_type: record.media_type },
+    { ...basePayload, file_type: record.mime_type },
+    { ...basePayload, media_type: record.media_type },
+    basePayload,
+  ]
+
+  let lastError: unknown = null
+  const seenPayloads = new Set<string>()
+
+  for (const payload of attempts) {
+    const signature = Object.keys(payload).sort().join('|')
+    if (seenPayloads.has(signature)) continue
+    seenPayloads.add(signature)
+
+    const { error } = await supabase.from('media_files').insert(payload)
+    if (!error) {
+      return true
+    }
+
+    lastError = error
+    if (!isMissingColumnError(error)) {
+      console.error('[Archive Job] Failed to insert media record:', error)
+      return false
+    }
+  }
+
+  if (lastError) {
+    console.error('[Archive Job] Failed to insert media record after schema fallbacks:', lastError)
+  }
+  return false
+}
+
+function parseTwitterJSON(content: string) {
+  const normalized = content.replace(/^\uFEFF/, '')
+  const parsedSegments: any[] = []
+
+  const assignmentRegex = /=\s*([\[{])/g
+  while (true) {
+    const nextMatch = assignmentRegex.exec(normalized)
+    if (!nextMatch) break
+    const startIndex = assignmentRegex.lastIndex - 1
+    const extracted = extractJsonLiteral(normalized, startIndex)
+    if (!extracted) {
+      assignmentRegex.lastIndex = Math.max(assignmentRegex.lastIndex, startIndex + 1)
+      continue
+    }
+
+    try {
+      const parsed = JSON.parse(extracted.value)
+      if (Array.isArray(parsed)) parsedSegments.push(...parsed)
+      else if (parsed && typeof parsed === 'object') parsedSegments.push(parsed)
+    } catch (error) {
+      console.warn('[Archive Job] Failed to parse archive assignment JSON segment:', error)
+    }
+
+    assignmentRegex.lastIndex = extracted.endIndex + 1
+  }
+
+  if (parsedSegments.length > 0) {
+    return parsedSegments
+  }
+
+  const trimmed = normalized.trim()
+  if (!trimmed) return []
+
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed)) return parsed
+    if (parsed && typeof parsed === 'object') return [parsed]
+  } catch {
+    // no-op
+  }
+
   return []
 }
 
@@ -195,9 +395,10 @@ async function extractMediaFiles(
 
   const entries = await listZipEntries(zipPath)
 
-  const mediaEntries = entries.filter((entry: any) =>
-    mediaFolders.some((folder) => entry.fileName.startsWith(folder + '/')) && !entry.fileName.endsWith('/'),
-  )
+  const mediaEntries = entries.filter((entry: any) => {
+    const relativePath = toArchiveRelativePath(entry.fileName)
+    return mediaFolders.some((folder) => relativePath.startsWith(`${folder}/`)) && !relativePath.endsWith('/')
+  })
 
   if (mediaEntries.length > TWITTER_UPLOAD_LIMITS.maxMediaFiles) {
     throw new Error(`Archive contains too many media files (${mediaEntries.length}). Limit is ${TWITTER_UPLOAD_LIMITS.maxMediaFiles}.`)
@@ -239,8 +440,9 @@ async function extractMediaFiles(
         throw new Error(`Archive entry not found while reading media: ${entry.fileName}`)
       }
 
-      const mediaType = entry.fileName.split('/')[1] || 'unknown_media'
-      const fileName = (entry.fileName.split('/').pop() || entry.fileName).replace(/\\/g, '_')
+      const relativePath = toArchiveRelativePath(entry.fileName)
+      const mediaType = relativePath.split('/')[1] || 'unknown_media'
+      const fileName = (relativePath.split('/').pop() || relativePath).replace(/\\/g, '_')
       const storagePath = `${userId}/${mediaType}/${fileName}`
 
       const ext = fileName.split('.').pop()?.toLowerCase()
@@ -282,15 +484,9 @@ async function extractMediaFiles(
       if (existingForBackup) {
         mediaFiles.push(metadataRecord)
         uploadedCount++
-      } else {
-        const { error: insertError } = await supabase.from('media_files').insert(metadataRecord)
-
-        if (!insertError) {
-          mediaFiles.push(metadataRecord)
-          uploadedCount++
-        } else {
-          console.error(`Failed to insert media record for ${fileName}:`, insertError)
-        }
+      } else if (await insertMediaFileRecord(metadataRecord)) {
+        mediaFiles.push(metadataRecord)
+        uploadedCount++
       }
 
       if (uploadResult.alreadyExists) {
@@ -425,32 +621,43 @@ export async function processArchiveUploadJob(params: {
     await markBackupJobProgress(supabase, jobId, 15, 'Extracting archive files...')
     await ensureArchiveJobNotCancelled(jobId)
 
-    const files: { [key: string]: string } = {}
+    const files: Record<ArchiveMetadataBucket, string[]> = {
+      account: [],
+      tweets: [],
+      followers: [],
+      following: [],
+      likes: [],
+      directMessages: [],
+    }
 
     try {
       const entries = await listZipEntries(tmpPath)
 
-      for (const fileName of [
-        'data/account.js',
-        'data/tweets.js',
-        'data/tweet.js',
-        'data/follower.js',
-        'data/following.js',
-        'data/like.js',
-        'data/direct-messages.js',
-      ]) {
-        await ensureArchiveJobNotCancelled(jobId)
-        const entry = entries.find((e) => e.fileName === fileName)
-        if (!entry) continue
+      const metadataEntriesByBucket: Record<ArchiveMetadataBucket, any[]> = {
+        account: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.account),
+        tweets: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.tweets),
+        followers: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.followers),
+        following: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.following),
+        likes: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.likes),
+        directMessages: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.directMessages),
+      }
 
-        const contentBuffer = await readZipEntryBufferWithLimit(
-          tmpPath,
-          fileName,
-          TWITTER_UPLOAD_LIMITS.maxMetadataEntryBytes,
-        )
-        const content = contentBuffer ? contentBuffer.toString('utf8') : ''
-        if (content) {
-          files[fileName] = content
+      for (const [bucket, bucketEntries] of Object.entries(metadataEntriesByBucket) as Array<[
+        ArchiveMetadataBucket,
+        any[],
+      ]>) {
+        for (const entry of bucketEntries) {
+          await ensureArchiveJobNotCancelled(jobId)
+
+          const contentBuffer = await readZipEntryBufferWithLimit(
+            tmpPath,
+            entry.fileName,
+            TWITTER_UPLOAD_LIMITS.maxMetadataEntryBytes,
+          )
+          const content = contentBuffer ? contentBuffer.toString('utf8') : ''
+          if (content) {
+            files[bucket].push(content)
+          }
         }
       }
     } catch (error) {
@@ -461,7 +668,7 @@ export async function processArchiveUploadJob(params: {
     await markBackupJobProgress(supabase, jobId, 30, 'Parsing archive metadata...')
     await ensureArchiveJobNotCancelled(jobId)
 
-    const hasCoreArchiveFiles = Boolean(files['data/account.js']) || Boolean(files['data/tweets.js'] || files['data/tweet.js'])
+    const hasCoreArchiveFiles = files.account.length > 0 || files.tweets.length > 0
     if (!hasCoreArchiveFiles) {
       throw new Error("This doesn't look like a Twitter archive. Upload the ZIP file downloaded from Twitter.")
     }
@@ -482,8 +689,8 @@ export async function processArchiveUploadJob(params: {
       platformUserId?: string
     } = {}
 
-    if (files['data/account.js']) {
-      const accountData = parseTwitterJSON(files['data/account.js'])
+    if (files.account.length > 0) {
+      const accountData = files.account.flatMap(parseTwitterJSON)
       const account = accountData[0]?.account
       if (account) {
         accountProfile = {
@@ -496,10 +703,9 @@ export async function processArchiveUploadJob(params: {
       }
     }
 
-    let tweets = []
-    const tweetsContent = files['data/tweets.js'] || files['data/tweet.js']
-    if (tweetsContent) {
-      const tweetsData = parseTwitterJSON(tweetsContent)
+    let tweets: any[] = []
+    if (files.tweets.length > 0) {
+      const tweetsData = files.tweets.flatMap(parseTwitterJSON)
       tweets = tweetsData
         .map((item: any) => ({
           id: item.tweet?.id_str,
@@ -520,9 +726,9 @@ export async function processArchiveUploadJob(params: {
       stats.tweets = tweets.length
     }
 
-    let followers = []
-    if (files['data/follower.js']) {
-      const followersData = parseTwitterJSON(files['data/follower.js'])
+    let followers: any[] = []
+    if (files.followers.length > 0) {
+      const followersData = files.followers.flatMap(parseTwitterJSON)
       followers = followersData
         .map((item: any) => {
           const accountId = item.follower?.accountId
@@ -539,9 +745,9 @@ export async function processArchiveUploadJob(params: {
       stats.followers = followers.length
     }
 
-    let following = []
-    if (files['data/following.js']) {
-      const followingData = parseTwitterJSON(files['data/following.js'])
+    let following: any[] = []
+    if (files.following.length > 0) {
+      const followingData = files.following.flatMap(parseTwitterJSON)
       following = followingData
         .map((item: any) => {
           const accountId = item.following?.accountId
@@ -558,9 +764,9 @@ export async function processArchiveUploadJob(params: {
       stats.following = following.length
     }
 
-    let likes = []
-    if (files['data/like.js']) {
-      const likesData = parseTwitterJSON(files['data/like.js'])
+    let likes: any[] = []
+    if (files.likes.length > 0) {
+      const likesData = files.likes.flatMap(parseTwitterJSON)
       likes = likesData
         .map((item: any) => ({
           tweet_id: item.like?.tweetId,
@@ -570,9 +776,9 @@ export async function processArchiveUploadJob(params: {
       stats.likes = likes.length
     }
 
-    let directMessages = []
-    if (files['data/direct-messages.js']) {
-      const dmsData = parseTwitterJSON(files['data/direct-messages.js'])
+    let directMessages: any[] = []
+    if (files.directMessages.length > 0) {
+      const dmsData = files.directMessages.flatMap(parseTwitterJSON)
       directMessages = dmsData
         .map((item: any) => {
           const messages = item.dmConversation?.messages || []
@@ -743,29 +949,41 @@ export async function processArchiveUploadJob(params: {
         media_type: 'archive_file',
       }
 
-      const { error: archiveMediaInsertError } = await supabase.from('media_files').insert(archiveMetadataRecord)
-      if (archiveMediaInsertError) {
-        console.error('Failed to insert archive media record:', archiveMediaInsertError)
+      if (!(await insertMediaFileRecord(archiveMetadataRecord))) {
+        console.error('Failed to insert archive media record after fallback attempts')
       }
     }
 
-    const { error: updateError } = await supabase
+    const backupDataUpdate = {
+      data: {
+        tweets: updatedTweets,
+        followers,
+        following,
+        likes,
+        direct_messages: updatedDMs,
+        profile: archiveProfile,
+        stats: updatedStats,
+        archive_file_path: archiveStoragePath,
+        uploaded_file_size: buffer.length,
+      },
+    }
+
+    let { error: updateError } = await supabase
       .from('backups')
       .update({
+        ...backupDataUpdate,
         archive_file_path: archiveStoragePath,
-        data: {
-          tweets: updatedTweets,
-          followers,
-          following,
-          likes,
-          direct_messages: updatedDMs,
-          profile: archiveProfile,
-          stats: updatedStats,
-          archive_file_path: archiveStoragePath,
-          uploaded_file_size: buffer.length,
-        },
       })
       .eq('id', backupId)
+
+    if (updateError && isMissingColumnError(updateError, 'archive_file_path')) {
+      console.warn('[Archive Job] backups.archive_file_path missing; retrying update without top-level column')
+      const retryResult = await supabase
+        .from('backups')
+        .update(backupDataUpdate)
+        .eq('id', backupId)
+      updateError = retryResult.error
+    }
 
     if (updateError) {
       console.error('Failed to update backup:', updateError)

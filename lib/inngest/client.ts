@@ -44,6 +44,12 @@ export type SnapshotScrapeRequestedEvent = {
 
 export type InngestEvents = ArchiveUploadRequestedEvent | SnapshotScrapeRequestedEvent
 
+const configuredInngestAppId = process.env.INNGEST_APP_ID?.trim() || 'social-backup'
+const configuredInngestEventKey = process.env.INNGEST_EVENT_KEY?.trim()
+const configuredInngestSigningKey = process.env.INNGEST_SIGNING_KEY?.trim()
+
 export const inngest = new Inngest({
-  id: 'social-backup',
+  id: configuredInngestAppId,
+  ...(configuredInngestEventKey ? { eventKey: configuredInngestEventKey } : {}),
+  ...(configuredInngestSigningKey ? { signingKey: configuredInngestSigningKey } : {}),
 })

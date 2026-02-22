@@ -6,6 +6,8 @@ import type { ArchiveWizardJobSummary } from '@/lib/archive-wizard/types'
 type WizardStep3Props = {
   selectedFile: File | null
   uploading: boolean
+  uploadProgressPercent: number
+  uploadProgressDetail: string | null
   activeJob: ArchiveWizardJobSummary | null
   uploadMessage: string | null
   error: string | null
@@ -30,6 +32,8 @@ function formatBytes(bytes: number) {
 export function WizardStep3({
   selectedFile,
   uploading,
+  uploadProgressPercent,
+  uploadProgressDetail,
   activeJob,
   uploadMessage,
   error,
@@ -98,6 +102,21 @@ export function WizardStep3({
         <p className="text-xs text-blue-100/70">Your archive is uploaded securely and processed in your account.</p>
       </div>
 
+      {uploading && (
+        <div className="mt-4 rounded-2xl border border-blue-400/35 bg-blue-500/10 p-4">
+          <div className="flex items-center justify-between text-xs text-blue-100/85">
+            <span>{uploadProgressDetail || 'Uploading archive...'}</span>
+            <span>{Math.max(0, Math.min(100, uploadProgressPercent))}%</span>
+          </div>
+          <div className="mt-2 h-2 w-full rounded-full bg-white/10">
+            <div
+              className="h-2 rounded-full bg-gradient-to-r from-blue-400 to-cyan-300 transition-all"
+              style={{ width: `${Math.max(0, Math.min(100, uploadProgressPercent))}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {processing && activeJob && (
         <div className="mt-6 rounded-2xl border border-blue-400/35 bg-blue-500/10 p-4">
           <p className="text-sm font-semibold text-blue-200">Processing your archive...</p>
@@ -108,6 +127,14 @@ export function WizardStep3({
             />
           </div>
           <p className="mt-2 text-sm text-blue-100/80">{activeJob.message || 'Running backup job...'}</p>
+          <p className="mt-2 text-xs text-blue-100/75">
+            Want to leave this wizard?
+            {' '}
+            <a href="/dashboard?tab=all-backups" className="font-semibold text-cyan-200 hover:underline">
+              Go to Dashboard progress
+            </a>
+            .
+          </p>
         </div>
       )}
 

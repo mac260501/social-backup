@@ -56,6 +56,8 @@ type TweetData = {
   reply_count?: number
   retweet_count?: number
   favorite_count?: number
+  is_pinned?: boolean
+  pinned_rank?: number
 }
 
 interface TweetCardProps {
@@ -132,6 +134,7 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
   const rawText = tweet.full_text || tweet.text || ''
   const isRetweet = tweet.retweeted || rawText.startsWith('RT @')
   const isReply = tweet.in_reply_to_status_id || tweet.in_reply_to_user_id
+  const isPinned = Boolean(tweet.is_pinned)
 
   // Extract media from tweet (supports multiple Twitter data formats)
   const getMediaFromTweet = (): TweetMediaItem[] => {
@@ -230,6 +233,14 @@ export function TweetCard({ tweet, ownerProfileImageUrl, ownerUsername, ownerDis
           </div>
 
           {/* Badge for Retweet/Reply */}
+          {isPinned && (
+            <div className="flex items-center gap-1 text-gray-500 dark:text-gray-400 text-sm mb-2">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M18 2h-2.5a1 1 0 0 0-.8.4l-2.1 2.8a1 1 0 0 1-.8.4H8a2 2 0 0 0-2 2v4.2a2 2 0 0 0 .6 1.4l3.4 3.4V21a1 1 0 0 0 1.7.7l2.3-2.3a1 1 0 0 1 .7-.3H18a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z" />
+              </svg>
+              <span>Pinned</span>
+            </div>
+          )}
           {isRetweet && (
             <div className="flex items-center gap-1 text-gray-500 dark:text-gray-400 text-sm mb-2">
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">

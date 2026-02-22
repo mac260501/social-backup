@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient as createServerClient } from '@/lib/supabase/server'
-import { createSignedGetUrl } from '@/lib/storage/r2'
+import { createSignedGetUrl, getObjectMetadataFromR2 } from '@/lib/storage/r2'
 
 const supabase = createAdminClient()
 
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     // Get backup and verify ownership
     const { data: backup, error: backupError } = await supabase
       .from('backups')
-      .select('archive_file_path, data, user_id')
+      .select('data, user_id')
       .eq('id', backupId)
       .single()
 
@@ -53,7 +53,22 @@ export async function GET(request: Request) {
       }, { status: 403 })
     }
 
-    const archiveFilePath = backup.archive_file_path || backup.data?.archive_file_path
+    const backupData =
+      backup.data && typeof backup.data === 'object' && !Array.isArray(backup.data)
+        ? (backup.data as { archive_file_path?: unknown })
+        : {}
+    let archiveFilePath =
+      typeof backupData.archive_file_path === 'string' ? backupData.archive_file_path.trim() : ''
+
+    if (!archiveFilePath) {
+      // Schema drift fallback: older rows may miss stored archive path even when
+      // the object exists at the canonical archive key.
+      const derivedPath = `${backup.user_id}/archives/${backupId}.zip`
+      const derivedObject = await getObjectMetadataFromR2(derivedPath)
+      if (derivedObject) {
+        archiveFilePath = derivedPath
+      }
+    }
 
     if (!archiveFilePath) {
       return NextResponse.json({
