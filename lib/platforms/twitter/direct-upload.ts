@@ -1,3 +1,11 @@
+import {
+  DEFAULT_ARCHIVE_IMPORT_SELECTION,
+  type DmEncryptionUploadMetadata,
+  type EncryptedDirectMessagesPayload,
+  normalizeArchiveImportSelection,
+  type ArchiveImportSelection,
+} from '@/lib/platforms/twitter/archive-import'
+
 export type DirectUploadJobSummary = {
   id: string
   status: 'queued' | 'processing' | 'completed' | 'failed'
@@ -20,6 +28,16 @@ export type DirectUploadProgress = {
   detail?: string
 }
 
+export type StagedArchiveUploadResult = {
+  success: boolean
+  stagedInputPath?: string
+  fileName?: string
+  fileType?: string
+  fileSize?: number
+  message?: string
+  error?: string
+}
+
 type PresignResponse = {
   success: boolean
   uploadUrl?: string
@@ -39,6 +57,21 @@ type MultipartInitResponse = {
 type MultipartSignResponse = {
   success: boolean
   uploadUrl?: string
+  error?: string
+}
+
+type MultipartCompleteResponse = {
+  success: boolean
+  stagedInputPath?: string
+  fileSize?: number
+  message?: string
+  error?: string
+}
+
+type DmEncryptionPresignResponse = {
+  success: boolean
+  uploadUrl?: string
+  stagedInputPath?: string
   error?: string
 }
 
@@ -117,37 +150,11 @@ async function uploadBlobViaXhr(params: {
   })
 }
 
-async function completeArchiveUpload(params: {
-  stagedInputPath: string
+async function uploadSinglePartToStaging(params: {
   file: File
-  username?: string
-}): Promise<DirectUploadResult> {
-  const completeResponse = await fetch('/api/platforms/twitter/upload-archive/complete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      stagedInputPath: params.stagedInputPath,
-      fileName: params.file.name,
-      fileType: params.file.type,
-      fileSize: params.file.size,
-      username: params.username,
-    }),
-  })
-
-  const completeData = await readJsonSafe<DirectUploadResult>(completeResponse)
-  if (!completeResponse.ok || !completeData?.success) {
-    throw new Error(completeData?.error || 'Failed to start archive processing')
-  }
-
-  return completeData
-}
-
-async function uploadSinglePart(params: {
-  file: File
-  username?: string
   onProgress?: (progress: DirectUploadProgress) => void
-}): Promise<DirectUploadResult> {
-  const { file, username, onProgress } = params
+}): Promise<StagedArchiveUploadResult> {
+  const { file, onProgress } = params
 
   emitProgress(onProgress, {
     phase: 'preparing',
@@ -199,36 +206,28 @@ async function uploadSinglePart(params: {
   }
 
   emitProgress(onProgress, {
-    phase: 'finalizing',
-    percent: FINALIZING_PROGRESS,
-    uploadedBytes: file.size,
-    totalBytes: file.size,
-    detail: 'Finalizing upload...',
-  })
-
-  const completeData = await completeArchiveUpload({
-    stagedInputPath: presignData.stagedInputPath,
-    file,
-    username,
-  })
-
-  emitProgress(onProgress, {
     phase: 'processing',
     percent: 100,
     uploadedBytes: file.size,
     totalBytes: file.size,
-    detail: 'Upload complete. Starting background processing...',
+    detail: 'Upload complete. Ready to review archive contents.',
   })
 
-  return completeData
+  return {
+    success: true,
+    stagedInputPath: presignData.stagedInputPath,
+    fileName: file.name,
+    fileType: file.type,
+    fileSize: file.size,
+    message: 'Archive uploaded. Review archive contents before importing.',
+  }
 }
 
-async function uploadMultipart(params: {
+async function uploadMultipartToStaging(params: {
   file: File
-  username?: string
   onProgress?: (progress: DirectUploadProgress) => void
-}): Promise<DirectUploadResult> {
-  const { file, username, onProgress } = params
+}): Promise<StagedArchiveUploadResult> {
+  const { file, onProgress } = params
 
   emitProgress(onProgress, {
     phase: 'preparing',
@@ -324,7 +323,6 @@ async function uploadMultipart(params: {
       throw new Error(`Missing ETag for uploaded part ${partNumber}`)
     }
 
-    // Ensure the last bytes for this part are accounted for.
     const previous = partLoadedBytes[partIndex]
     if (previous < partBlob.size) {
       const delta = partBlob.size - previous
@@ -384,13 +382,13 @@ async function uploadMultipart(params: {
       fileName: file.name,
       fileType: file.type,
       fileSize: file.size,
-      username,
+      startProcessing: false,
     }),
   })
 
-  const completeData = await readJsonSafe<DirectUploadResult>(completeResponse)
-  if (!completeResponse.ok || !completeData?.success) {
-    throw new Error(completeData?.error || 'Failed to start archive processing')
+  const completeData = await readJsonSafe<MultipartCompleteResponse>(completeResponse)
+  if (!completeResponse.ok || !completeData?.success || !completeData.stagedInputPath) {
+    throw new Error(completeData?.error || 'Failed to finalize multipart upload')
   }
 
   emitProgress(onProgress, {
@@ -398,29 +396,162 @@ async function uploadMultipart(params: {
     percent: 100,
     uploadedBytes: file.size,
     totalBytes: file.size,
-    detail: 'Upload complete. Starting background processing...',
+    detail: 'Upload complete. Ready to review archive contents.',
   })
 
-  return completeData
+  return {
+    success: true,
+    stagedInputPath: completeData.stagedInputPath,
+    fileName: file.name,
+    fileType: file.type,
+    fileSize: typeof completeData.fileSize === 'number' && completeData.fileSize > 0 ? completeData.fileSize : file.size,
+    message: completeData.message || 'Archive uploaded. Review archive contents before importing.',
+  }
 }
 
-export async function uploadTwitterArchiveDirect(params: {
+export async function uploadTwitterArchiveToStaging(params: {
   file: File
-  username?: string
   onProgress?: (progress: DirectUploadProgress) => void
-}): Promise<DirectUploadResult> {
-  const { file, username, onProgress } = params
+}): Promise<StagedArchiveUploadResult> {
+  const { file, onProgress } = params
 
   try {
     if (file.size >= MULTIPART_MIN_BYTES) {
-      return await uploadMultipart({ file, username, onProgress })
+      return await uploadMultipartToStaging({ file, onProgress })
     }
 
-    return await uploadSinglePart({ file, username, onProgress })
+    return await uploadSinglePartToStaging({ file, onProgress })
   } catch (error) {
     return {
       success: false,
       error: readErrorFallback(error, DEFAULT_UPLOAD_ERROR),
     }
   }
+}
+
+export async function startTwitterArchiveImport(params: {
+  stagedInputPath: string
+  fileName: string
+  fileType?: string
+  fileSize: number
+  username?: string
+  importSelection?: unknown
+  dmEncryption?: DmEncryptionUploadMetadata | null
+  preserveArchiveFile?: boolean
+}): Promise<DirectUploadResult> {
+  const importSelection = normalizeArchiveImportSelection(
+    params.importSelection || DEFAULT_ARCHIVE_IMPORT_SELECTION,
+  )
+
+  try {
+    const completeResponse = await fetch('/api/platforms/twitter/upload-archive/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stagedInputPath: params.stagedInputPath,
+        fileName: params.fileName,
+        fileType: params.fileType,
+        fileSize: params.fileSize,
+        username: params.username,
+        importSelection,
+        dmEncryption: params.dmEncryption || null,
+        preserveArchiveFile: params.preserveArchiveFile,
+      }),
+    })
+
+    const completeData = await readJsonSafe<DirectUploadResult>(completeResponse)
+    if (!completeResponse.ok || !completeData?.success) {
+      throw new Error(completeData?.error || 'Failed to start archive processing')
+    }
+
+    return completeData
+  } catch (error) {
+    return {
+      success: false,
+      error: readErrorFallback(error, 'Failed to start archive processing'),
+    }
+  }
+}
+
+export async function discardStagedTwitterArchive(stagedInputPath: string): Promise<void> {
+  if (!stagedInputPath) return
+
+  await fetch('/api/platforms/twitter/upload-archive/discard', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stagedInputPath }),
+  }).catch(() => null)
+}
+
+export async function uploadEncryptedDmPayloadToStaging(params: {
+  payload: EncryptedDirectMessagesPayload
+  fileName?: string
+}): Promise<{ success: true; stagedInputPath: string } | { success: false; error: string }> {
+  const fileName = params.fileName || 'encrypted-dms.json'
+  const body = JSON.stringify(params.payload)
+  const blob = new Blob([body], { type: 'application/json' })
+
+  try {
+    const presignResponse = await fetch('/api/platforms/twitter/upload-archive/dm-encryption/presign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName,
+        fileSize: blob.size,
+      }),
+    })
+
+    const presignData = await readJsonSafe<DmEncryptionPresignResponse>(presignResponse)
+    if (!presignResponse.ok || !presignData?.success || !presignData.uploadUrl || !presignData.stagedInputPath) {
+      throw new Error(presignData?.error || 'Failed to create encrypted DM upload URL')
+    }
+
+    const uploadResponse = await fetch(presignData.uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: blob,
+    })
+
+    if (!uploadResponse.ok) {
+      throw new Error(`Failed to upload encrypted DM payload (status ${uploadResponse.status})`)
+    }
+
+    return {
+      success: true,
+      stagedInputPath: presignData.stagedInputPath,
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: readErrorFallback(error, 'Failed to upload encrypted DM payload'),
+    }
+  }
+}
+
+export async function uploadTwitterArchiveDirect(params: {
+  file: File
+  username?: string
+  onProgress?: (progress: DirectUploadProgress) => void
+  importSelection?: ArchiveImportSelection
+}): Promise<DirectUploadResult> {
+  const { file, username, onProgress, importSelection } = params
+
+  const staged = await uploadTwitterArchiveToStaging({ file, onProgress })
+  if (!staged.success || !staged.stagedInputPath) {
+    return {
+      success: false,
+      error: staged.error || DEFAULT_UPLOAD_ERROR,
+    }
+  }
+
+  return startTwitterArchiveImport({
+    stagedInputPath: staged.stagedInputPath,
+    fileName: staged.fileName || file.name,
+    fileType: staged.fileType || file.type,
+    fileSize: staged.fileSize || file.size,
+    username,
+    importSelection: importSelection || DEFAULT_ARCHIVE_IMPORT_SELECTION,
+  })
 }

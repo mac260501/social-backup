@@ -1,8 +1,8 @@
 import type { TwitterScrapeTargets } from '@/lib/twitter/types'
 import { inngest } from '@/lib/inngest/client'
+import type { ArchiveImportSelection, DmEncryptionUploadMetadata } from '@/lib/platforms/twitter/archive-import'
 import { processArchiveUploadJob } from '@/lib/platforms/twitter/archive-upload-job'
 import { processSnapshotScrapeJob } from '@/lib/platforms/twitter/snapshot-scrape-job'
-import { runArchiveReminderCycle } from '@/lib/archive-wizard/reminder-runner'
 
 export const archiveUploadProcessor = inngest.createFunction(
   {
@@ -17,6 +17,9 @@ export const archiveUploadProcessor = inngest.createFunction(
         userId: string
         username: string
         inputStoragePath: string
+        importSelection: ArchiveImportSelection
+        dmEncryption?: DmEncryptionUploadMetadata | null
+        preserveArchiveFile?: boolean
       }
 
       await processArchiveUploadJob({
@@ -24,6 +27,9 @@ export const archiveUploadProcessor = inngest.createFunction(
         userId: payload.userId,
         username: payload.username,
         inputStoragePath: payload.inputStoragePath,
+        importSelection: payload.importSelection,
+        dmEncryption: payload.dmEncryption,
+        preserveArchiveFile: payload.preserveArchiveFile,
       })
     })
   },
@@ -74,17 +80,4 @@ export const snapshotScrapeProcessor = inngest.createFunction(
   },
 )
 
-export const archiveReminderScheduler = inngest.createFunction(
-  {
-    id: 'archive-reminders-hourly',
-    retries: 2,
-  },
-  { cron: '5 * * * *' },
-  async ({ step }) => {
-    await step.run('dispatch-archive-reminders', async () => {
-      await runArchiveReminderCycle(500)
-    })
-  },
-)
-
-export const inngestFunctions = [archiveUploadProcessor, snapshotScrapeProcessor, archiveReminderScheduler]
+export const inngestFunctions = [archiveUploadProcessor, snapshotScrapeProcessor]

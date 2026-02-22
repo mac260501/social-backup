@@ -5,6 +5,10 @@ import {
   markBackupJobFailed,
   mergeBackupJobPayload,
 } from '@/lib/jobs/backup-jobs'
+import {
+  normalizeDmEncryptionUploadMetadata,
+  normalizeArchiveImportSelection,
+} from '@/lib/platforms/twitter/archive-import'
 import { isZipUpload, TWITTER_UPLOAD_LIMITS, USER_STORAGE_LIMITS } from '@/lib/platforms/twitter/limits'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { calculateUserStorageSummary } from '@/lib/storage/usage'
@@ -69,8 +73,30 @@ export async function enqueueArchiveUploadJob(params: {
   fileName: string
   fileSize: number
   stagedInputPath: string
+  importSelection?: unknown
+  dmEncryption?: unknown
+  preserveArchiveFile?: boolean
 }) {
   const { userId, username, fileName, fileSize, stagedInputPath } = params
+  const importSelection = normalizeArchiveImportSelection(params.importSelection)
+  const hasDmEncryptionPayload = params.dmEncryption !== undefined && params.dmEncryption !== null
+  const parsedDmEncryption = normalizeDmEncryptionUploadMetadata(params.dmEncryption)
+  if (hasDmEncryptionPayload && !parsedDmEncryption) {
+    throw new Error('Invalid DM encryption payload.')
+  }
+  const dmEncryption = parsedDmEncryption
+    ? {
+        ...parsedDmEncryption,
+        encrypted_input_path: ensureUserScopedStagedPath(parsedDmEncryption.encrypted_input_path, userId),
+      }
+    : null
+  if (importSelection.direct_messages && !dmEncryption) {
+    throw new Error('DM encryption is required when importing chats.')
+  }
+  const preserveArchiveFile =
+    typeof params.preserveArchiveFile === 'boolean'
+      ? params.preserveArchiveFile
+      : true
 
   const job = await createBackupJob(supabase, {
     userId,
@@ -80,12 +106,18 @@ export async function enqueueArchiveUploadJob(params: {
       username,
       upload_file_name: fileName,
       upload_file_size: fileSize,
+      import_selection: importSelection,
+      dm_encryption: dmEncryption,
+      preserve_archive_file: preserveArchiveFile,
     },
   })
 
   await mergeBackupJobPayload(supabase, job.id, {
     staged_input_path: stagedInputPath,
     lifecycle_state: 'queued',
+    import_selection: importSelection,
+    dm_encryption: dmEncryption,
+    preserve_archive_file: preserveArchiveFile,
   })
 
   try {
@@ -101,6 +133,9 @@ export async function enqueueArchiveUploadJob(params: {
         userId,
         username,
         inputStoragePath: stagedInputPath,
+        importSelection,
+        dmEncryption,
+        preserveArchiveFile,
       },
     })
 
@@ -116,7 +151,10 @@ export async function enqueueArchiveUploadJob(params: {
       job.id,
       `Failed to queue background processing: ${enqueueError instanceof Error ? enqueueError.message : 'Unknown error'}`,
     )
-    await deleteObjectsFromR2([stagedInputPath]).catch(() => {})
+    await deleteObjectsFromR2([
+      stagedInputPath,
+      ...(dmEncryption ? [dmEncryption.encrypted_input_path] : []),
+    ]).catch(() => {})
     throw enqueueError
   }
 

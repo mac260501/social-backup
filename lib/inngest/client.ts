@@ -1,3 +1,4 @@
+import type { ArchiveImportSelection, DmEncryptionUploadMetadata } from '@/lib/platforms/twitter/archive-import'
 import { Inngest } from 'inngest'
 
 export type ArchiveUploadRequestedEvent = {
@@ -7,6 +8,9 @@ export type ArchiveUploadRequestedEvent = {
     userId: string
     username: string
     inputStoragePath: string
+    importSelection: ArchiveImportSelection
+    dmEncryption?: DmEncryptionUploadMetadata | null
+    preserveArchiveFile?: boolean
   }
 }
 

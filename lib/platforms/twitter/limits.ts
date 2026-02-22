@@ -24,6 +24,10 @@ export const TWITTER_UPLOAD_LIMITS = {
   maxMediaBytes: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_MEDIA_BYTES', 5 * GB),
   maxMediaEntryBytes: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_MEDIA_ENTRY_BYTES', 250 * MB),
   maxMetadataEntryBytes: readPositiveIntEnv('TWITTER_MAX_ARCHIVE_METADATA_ENTRY_BYTES', 25 * MB),
+  maxEncryptedDmPayloadBytes: readPositiveIntEnv('TWITTER_MAX_ENCRYPTED_DM_PAYLOAD_BYTES', 250 * MB),
+  encryptedArchiveChunkBytes: readPositiveIntEnv('TWITTER_ENCRYPTED_ARCHIVE_CHUNK_BYTES', 5 * MB),
+  maxEncryptedArchiveChunkBytes: readPositiveIntEnv('TWITTER_MAX_ENCRYPTED_ARCHIVE_CHUNK_BYTES', 8 * MB),
+  maxEncryptedArchiveChunkCount: readPositiveIntEnv('TWITTER_MAX_ENCRYPTED_ARCHIVE_CHUNK_COUNT', 25_000),
 }
 
 export const USER_STORAGE_LIMITS = {

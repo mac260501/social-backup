@@ -13,6 +13,8 @@ function statusForArchiveError(message: string): number {
   if (message.includes('empty')) return 400
   if (message.includes('size limit')) return 413
   if (message.includes('Storage limit exceeded')) return 413
+  if (message.includes('Invalid DM encryption payload')) return 400
+  if (message.includes('DM encryption is required when importing chats')) return 400
   if (message.includes('Unauthorized')) return 401
   return 500
 }
@@ -32,6 +34,29 @@ export async function POST(request: Request) {
     const formData = await request.formData()
     const file = formData.get('file') as File
     const username = (formData.get('username') as string) || user.email?.split('@')[0] || 'twitter-user'
+    const importSelection = formData.get('importSelection')
+    const dmEncryption = formData.get('dmEncryption')
+    const preserveArchiveFile = formData.get('preserveArchiveFile')
+    const parsedImportSelection = (() => {
+      if (typeof importSelection !== 'string' || !importSelection.trim()) return undefined
+      try {
+        return JSON.parse(importSelection)
+      } catch {
+        return undefined
+      }
+    })()
+    const parsedDmEncryption = (() => {
+      if (typeof dmEncryption !== 'string' || !dmEncryption.trim()) return undefined
+      try {
+        return JSON.parse(dmEncryption)
+      } catch {
+        return undefined
+      }
+    })()
+    const parsedPreserveArchiveFile =
+      typeof preserveArchiveFile === 'string'
+        ? preserveArchiveFile.trim().toLowerCase() === 'true'
+        : undefined
 
     if (!file) {
       return NextResponse.json({ success: false, error: 'No file uploaded' }, { status: 400 })
@@ -61,6 +86,9 @@ export async function POST(request: Request) {
       fileName: file.name,
       fileSize: file.size,
       stagedInputPath,
+      importSelection: parsedImportSelection,
+      dmEncryption: parsedDmEncryption,
+      preserveArchiveFile: parsedPreserveArchiveFile,
     })
 
     return NextResponse.json({

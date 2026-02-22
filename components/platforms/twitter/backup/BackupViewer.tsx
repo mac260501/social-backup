@@ -5,7 +5,23 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { ExternalLink } from 'lucide-react'
 import { TweetCard } from '@/components/platforms/twitter/backup/TweetCard'
+import {
+  normalizeEncryptedDirectMessagesPayload,
+  type EncryptedDirectMessagesPayload,
+} from '@/lib/platforms/twitter/archive-import'
+import {
+  decryptEncryptedArchiveChunkWithDataKey,
+  normalizeEncryptedArchiveManifest,
+  type EncryptedArchiveManifest,
+  unlockEncryptedArchiveDataKeyWithPassphrase,
+  unlockEncryptedArchiveDataKeyWithRecoveryKey,
+} from '@/lib/platforms/twitter/encrypted-archive'
 import { formatPartialReasonLabel, getBackupPartialDetails, isArchiveBackup as isArchiveBackupRecord } from '@/lib/platforms/backup'
+import {
+  decryptDirectMessagesWithPassphrase,
+  decryptDirectMessagesWithRecoveryKey,
+} from '@/lib/platforms/twitter/dm-crypto'
+import { createEncryptedArchiveChunkDownloadUrl } from '@/lib/platforms/twitter/encrypted-archive-upload'
 import { buildInternalMediaUrl } from '@/lib/storage/media-url'
 
 interface BackupViewerProps {
@@ -29,6 +45,8 @@ type ProfileMediaItem = {
 }
 type PeopleTab = 'followers' | 'following'
 type ViewMode = 'profile' | 'chat'
+type DmUnlockMode = 'passphrase' | 'recovery'
+type ArchiveUnlockMode = 'passphrase' | 'recovery'
 type ChatMessage = {
   text: string
   senderId: string
@@ -74,6 +92,15 @@ type SnapshotScrapeTargets = {
   following: boolean
 }
 
+type ArchiveImportSelection = {
+  tweets: boolean
+  followers: boolean
+  following: boolean
+  likes: boolean
+  direct_messages: boolean
+  media: boolean
+}
+
 interface BackupData {
   profile?: BackupProfile
   stats?: Record<string, number | string>
@@ -83,6 +110,10 @@ interface BackupData {
   following?: unknown[]
   dms?: unknown[]
   direct_messages?: unknown[]
+  encrypted_direct_messages?: unknown
+  encrypted_archive?: unknown
+  archive_file_path?: string
+  import_selection?: Partial<ArchiveImportSelection>
   scrape?: {
     targets?: Partial<SnapshotScrapeTargets>
     is_partial?: boolean | string | number | null
@@ -206,6 +237,24 @@ function formatArchiveUserLabel(userId?: string | null): string {
   return `Archived user ${compact}`
 }
 
+function isUserAbortedFileSave(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const details = error as { name?: unknown; message?: unknown }
+  const name = typeof details.name === 'string' ? details.name.toLowerCase() : ''
+  const message = typeof details.message === 'string' ? details.message.toLowerCase() : ''
+  return (
+    name === 'aborterror'
+    || message.includes('user aborted')
+    || message.includes('aborted a request')
+    || message.includes('operation was aborted')
+  )
+}
+
+function getSafeArchiveDownloadErrorMessage(error: unknown): string | null {
+  if (isUserAbortedFileSave(error)) return null
+  return 'Unable to decrypt and download archive. Check your passphrase or recovery key and try again.'
+}
+
 function parseSnapshotTargets(value: unknown): SnapshotScrapeTargets | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const source = value as Record<string, unknown>
@@ -219,6 +268,23 @@ function parseSnapshotTargets(value: unknown): SnapshotScrapeTargets | null {
     replies: Boolean(source.replies),
     followers: Boolean(source.followers),
     following: Boolean(source.following),
+  }
+}
+
+function parseArchiveImportSelection(value: unknown): ArchiveImportSelection | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const source = value as Record<string, unknown>
+  const keys: Array<keyof ArchiveImportSelection> = ['tweets', 'followers', 'following', 'likes', 'direct_messages', 'media']
+  const hasAnyKey = keys.some((key) => key in source)
+  if (!hasAnyKey) return null
+
+  return {
+    tweets: readBooleanLike(source.tweets),
+    followers: readBooleanLike(source.followers),
+    following: readBooleanLike(source.following),
+    likes: readBooleanLike(source.likes),
+    direct_messages: readBooleanLike(source.direct_messages),
+    media: readBooleanLike(source.media),
   }
 }
 
@@ -356,6 +422,16 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('profile')
   const [chatSearch, setChatSearch] = useState('')
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
+  const [dmUnlockMode, setDmUnlockMode] = useState<DmUnlockMode>('passphrase')
+  const [dmUnlockSecret, setDmUnlockSecret] = useState('')
+  const [dmUnlockError, setDmUnlockError] = useState<string | null>(null)
+  const [unlockingDms, setUnlockingDms] = useState(false)
+  const [decryptedDirectMessages, setDecryptedDirectMessages] = useState<unknown[] | null>(null)
+  const [archiveUnlockMode, setArchiveUnlockMode] = useState<ArchiveUnlockMode>('passphrase')
+  const [archiveUnlockSecret, setArchiveUnlockSecret] = useState('')
+  const [archiveUnlockError, setArchiveUnlockError] = useState<string | null>(null)
+  const [downloadingEncryptedArchive, setDownloadingEncryptedArchive] = useState(false)
+  const [encryptedArchiveDownloadProgress, setEncryptedArchiveDownloadProgress] = useState(0)
   const [peopleViewOpen, setPeopleViewOpen] = useState(false)
   const [activePeopleTab, setActivePeopleTab] = useState<PeopleTab>('following')
   const profile = backup.data?.profile
@@ -445,6 +521,127 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     }
   }
 
+  const downloadBlobToDisk = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = fileName
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleDownloadEncryptedArchive = async () => {
+    if (!encryptedArchiveManifest) return
+
+    const secret = archiveUnlockSecret.trim()
+    if (!secret) {
+      setArchiveUnlockError(archiveUnlockMode === 'passphrase' ? 'Enter your passphrase.' : 'Enter your recovery key.')
+      return
+    }
+
+    setDownloadingEncryptedArchive(true)
+    setArchiveUnlockError(null)
+    setEncryptedArchiveDownloadProgress(0)
+
+    const sortedChunks = [...encryptedArchiveManifest.chunks].sort((a, b) => a.index - b.index)
+    const totalChunks = sortedChunks.length
+    const suggestedFileName = encryptedArchiveManifest.file.file_name || `${backup.id}.zip`
+    let fileStream: { write: (value: Uint8Array) => Promise<void>; close: () => Promise<void>; abort?: () => Promise<void> } | null = null
+
+    try {
+      const dataKey =
+        archiveUnlockMode === 'passphrase'
+          ? await unlockEncryptedArchiveDataKeyWithPassphrase({
+              manifest: encryptedArchiveManifest,
+              passphrase: secret,
+            })
+          : await unlockEncryptedArchiveDataKeyWithRecoveryKey({
+              manifest: encryptedArchiveManifest,
+              recoveryKey: secret,
+            })
+
+      const windowWithPicker = window as Window & {
+        showSaveFilePicker?: (options?: unknown) => Promise<{
+          createWritable: () => Promise<{
+            write: (chunk: Uint8Array) => Promise<void>
+            close: () => Promise<void>
+            abort?: () => Promise<void>
+          }>
+        }>
+      }
+      const supportsPicker = typeof windowWithPicker.showSaveFilePicker === 'function'
+
+      if (supportsPicker) {
+        const handle = await windowWithPicker.showSaveFilePicker?.({
+          suggestedName: suggestedFileName,
+          types: [
+            {
+              description: 'ZIP Archive',
+              accept: {
+                'application/zip': ['.zip'],
+              },
+            },
+          ],
+        })
+
+        if (handle) {
+          fileStream = await handle.createWritable()
+        }
+      }
+
+      const fallbackParts: BlobPart[] = []
+
+      for (let i = 0; i < sortedChunks.length; i += 1) {
+        const chunk = sortedChunks[i]
+        const downloadUrl = await createEncryptedArchiveChunkDownloadUrl(chunk.storage_path)
+        const chunkResponse = await fetch(downloadUrl)
+        if (!chunkResponse.ok) {
+          throw new Error(`Failed to download encrypted archive chunk ${i + 1}.`)
+        }
+        const encryptedChunkBuffer = await chunkResponse.arrayBuffer()
+        const plaintextChunk = await decryptEncryptedArchiveChunkWithDataKey({
+          dataKey,
+          ciphertext: encryptedChunkBuffer,
+          ivBase64: chunk.iv_b64,
+        })
+
+        if (fileStream) {
+          await fileStream.write(plaintextChunk)
+        } else {
+          fallbackParts.push(new Uint8Array(plaintextChunk))
+        }
+
+        setEncryptedArchiveDownloadProgress(Math.round(((i + 1) / Math.max(1, totalChunks)) * 100))
+      }
+
+      if (fileStream) {
+        await fileStream.close()
+      } else {
+        downloadBlobToDisk(new Blob(fallbackParts, { type: 'application/zip' }), suggestedFileName)
+      }
+
+      setArchiveUnlockSecret('')
+      setArchiveUnlockError(null)
+    } catch (error) {
+      if (fileStream?.abort) {
+        try {
+          await fileStream.abort()
+        } catch {
+          // no-op
+        }
+      }
+      const safeMessage = getSafeArchiveDownloadErrorMessage(error)
+      if (safeMessage) {
+        console.error('[Encrypted Archive Download] Failed:', error)
+      }
+      setArchiveUnlockError(safeMessage)
+    } finally {
+      setDownloadingEncryptedArchive(false)
+    }
+  }
+
   const formatDate = (dateString?: string) => {
     if (!dateString) return 'Unknown date'
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -482,7 +679,23 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   )
   const followers = useMemo(() => (Array.isArray(backup.data?.followers) ? backup.data.followers : []), [backup.data?.followers])
   const following = useMemo(() => (Array.isArray(backup.data?.following) ? backup.data.following : []), [backup.data?.following])
-  const dms = useMemo(() => backup.data?.dms || backup.data?.direct_messages || [], [backup.data?.dms, backup.data?.direct_messages])
+  const encryptedDirectMessagesPayload = useMemo<EncryptedDirectMessagesPayload | null>(
+    () => normalizeEncryptedDirectMessagesPayload(backup.data?.encrypted_direct_messages),
+    [backup.data?.encrypted_direct_messages],
+  )
+  const encryptedArchiveManifest = useMemo<EncryptedArchiveManifest | null>(
+    () => normalizeEncryptedArchiveManifest(backup.data?.encrypted_archive),
+    [backup.data?.encrypted_archive],
+  )
+  const hasEncryptedDirectMessages = Boolean(encryptedDirectMessagesPayload)
+  const hasEncryptedArchive = Boolean(encryptedArchiveManifest)
+  const dms = useMemo(() => {
+    if (hasEncryptedDirectMessages) {
+      return decryptedDirectMessages || []
+    }
+    return backup.data?.dms || backup.data?.direct_messages || []
+  }, [backup.data?.direct_messages, backup.data?.dms, decryptedDirectMessages, hasEncryptedDirectMessages])
+  const chatsLocked = hasEncryptedDirectMessages && !decryptedDirectMessages
 
   const displayName =
     backup.data?.profile?.displayName || backup.data?.profile?.name || backup.data?.profile?.username || 'Archived Account'
@@ -496,14 +709,59 @@ export function BackupViewer({ backup }: BackupViewerProps) {
     ? partial.reasons.map((reason) => formatPartialReasonLabel(reason)).join(' • ')
     : 'This snapshot did not complete all requested data.'
   const scrapeTargets = parseSnapshotTargets(backup.data?.scrape?.targets)
+  const archiveImportSelection = parseArchiveImportSelection(backup.data?.import_selection)
   const hasSnapshotTargetConfig = !isArchiveBackup && !!scrapeTargets
+  const hasArchiveImportSelection = isArchiveBackup && !!archiveImportSelection
 
-  const postsIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.tweets) : true
-  const repliesIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.replies) : true
-  const followersIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.followers) : true
-  const followingIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.following) : true
-  const mediaIncluded = isArchiveBackup ? true : hasSnapshotTargetConfig ? Boolean(scrapeTargets?.tweets || scrapeTargets?.replies) : true
+  const postsIncluded = isArchiveBackup
+    ? hasArchiveImportSelection
+      ? Boolean(archiveImportSelection?.tweets)
+      : true
+    : hasSnapshotTargetConfig
+      ? Boolean(scrapeTargets?.tweets)
+      : true
+  const repliesIncluded = isArchiveBackup
+    ? hasArchiveImportSelection
+      ? Boolean(archiveImportSelection?.tweets)
+      : true
+    : hasSnapshotTargetConfig
+      ? Boolean(scrapeTargets?.replies)
+      : true
+  const followersIncluded = isArchiveBackup
+    ? hasArchiveImportSelection
+      ? Boolean(archiveImportSelection?.followers)
+      : true
+    : hasSnapshotTargetConfig
+      ? Boolean(scrapeTargets?.followers)
+      : true
+  const followingIncluded = isArchiveBackup
+    ? hasArchiveImportSelection
+      ? Boolean(archiveImportSelection?.following)
+      : true
+    : hasSnapshotTargetConfig
+      ? Boolean(scrapeTargets?.following)
+      : true
+  const mediaIncluded = isArchiveBackup
+    ? hasArchiveImportSelection
+      ? Boolean(archiveImportSelection?.media)
+      : true
+    : hasSnapshotTargetConfig
+      ? Boolean(scrapeTargets?.tweets || scrapeTargets?.replies)
+      : true
   const chatsIncluded = isArchiveBackup
+    ? hasEncryptedDirectMessages ||
+      (hasArchiveImportSelection
+        ? Boolean(archiveImportSelection?.direct_messages)
+        : true)
+    : false
+  const plainArchivePath = (
+    typeof backup.archive_file_path === 'string' && backup.archive_file_path.trim()
+      ? backup.archive_file_path.trim()
+      : typeof backup.data?.archive_file_path === 'string' && backup.data.archive_file_path.trim()
+        ? backup.data.archive_file_path.trim()
+        : ''
+  )
+  const plainArchiveDownloadAvailable = Boolean(plainArchivePath) && !hasEncryptedArchive
 
   const profileFollowersCount =
     optionalNumberValue(profile?.followersCount) ??
@@ -842,6 +1100,20 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   )
 
   useEffect(() => {
+    setDecryptedDirectMessages(null)
+    setDmUnlockSecret('')
+    setDmUnlockError(null)
+    setDmUnlockMode('passphrase')
+  }, [backup.id, encryptedDirectMessagesPayload?.metadata.encrypted_at])
+
+  useEffect(() => {
+    setArchiveUnlockMode('passphrase')
+    setArchiveUnlockSecret('')
+    setArchiveUnlockError(null)
+    setEncryptedArchiveDownloadProgress(0)
+  }, [backup.id, encryptedArchiveManifest?.file.encrypted_at])
+
+  useEffect(() => {
     if (viewMode !== 'chat') return
     if (!selectedConversationId && filteredDmConversations.length > 0) {
       setSelectedConversationId(filteredDmConversations[0].id)
@@ -851,6 +1123,35 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const openPeople = (tab: PeopleTab) => {
     setActivePeopleTab(tab)
     setPeopleViewOpen(true)
+  }
+
+  const handleUnlockChats = async () => {
+    if (!encryptedDirectMessagesPayload) return
+    if (!dmUnlockSecret.trim()) {
+      setDmUnlockError(dmUnlockMode === 'passphrase' ? 'Enter your passphrase.' : 'Enter your recovery key.')
+      return
+    }
+
+    setUnlockingDms(true)
+    setDmUnlockError(null)
+    try {
+      const decrypted = dmUnlockMode === 'passphrase'
+        ? await decryptDirectMessagesWithPassphrase({
+            payload: encryptedDirectMessagesPayload,
+            passphrase: dmUnlockSecret,
+          })
+        : await decryptDirectMessagesWithRecoveryKey({
+            payload: encryptedDirectMessagesPayload,
+            recoveryKey: dmUnlockSecret,
+          })
+      setDecryptedDirectMessages(decrypted)
+      setDmUnlockSecret('')
+      setSelectedConversationId(null)
+    } catch (error) {
+      setDmUnlockError(error instanceof Error ? error.message : 'Unable to unlock encrypted chats.')
+    } finally {
+      setUnlockingDms(false)
+    }
   }
 
   const personDisplay = (person: unknown) => {
@@ -972,8 +1273,14 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                       type="text"
                       value={chatSearch}
                       onChange={(e) => setChatSearch(e.target.value)}
-                      placeholder={chatsIncluded ? 'Search' : 'Not available for this snapshot'}
-                      disabled={!chatsIncluded}
+                      placeholder={
+                        !chatsIncluded
+                          ? 'Not available for this snapshot'
+                          : chatsLocked
+                            ? 'Unlock chats to search'
+                            : 'Search'
+                      }
+                      disabled={!chatsIncluded || chatsLocked}
                       className="w-full rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white outline-none placeholder:text-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
                     />
                   </div>
@@ -982,6 +1289,63 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                     {!chatsIncluded ? (
                       <div className="p-6 text-center text-gray-400">
                         Direct messages are not included in snapshots.
+                      </div>
+                    ) : chatsLocked ? (
+                      <div className="p-4">
+                        <div className="rounded-2xl border border-cyan-400/35 bg-cyan-500/10 p-4">
+                          <p className="text-sm font-semibold text-cyan-100">Chats are encrypted</p>
+                          <p className="mt-1 text-xs text-cyan-100/85">
+                            Unlock with your passphrase or recovery key.
+                          </p>
+                          <div className="mt-3 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDmUnlockMode('passphrase')
+                                setDmUnlockError(null)
+                              }}
+                              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                                dmUnlockMode === 'passphrase'
+                                  ? 'bg-cyan-400 text-slate-950'
+                                  : 'border border-cyan-300/40 text-cyan-100'
+                              }`}
+                            >
+                              Passphrase
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDmUnlockMode('recovery')
+                                setDmUnlockError(null)
+                              }}
+                              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                                dmUnlockMode === 'recovery'
+                                  ? 'bg-cyan-400 text-slate-950'
+                                  : 'border border-cyan-300/40 text-cyan-100'
+                              }`}
+                            >
+                              Recovery key
+                            </button>
+                          </div>
+                          <input
+                            type={dmUnlockMode === 'passphrase' ? 'password' : 'text'}
+                            value={dmUnlockSecret}
+                            onChange={(e) => setDmUnlockSecret(e.target.value)}
+                            placeholder={dmUnlockMode === 'passphrase' ? 'Enter passphrase' : 'Enter recovery key'}
+                            className="mt-3 w-full rounded-lg border border-cyan-200/30 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-cyan-100/60"
+                          />
+                          {dmUnlockError && (
+                            <p className="mt-2 text-xs text-rose-300">{dmUnlockError}</p>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleUnlockChats()}
+                            disabled={unlockingDms}
+                            className="mt-3 w-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {unlockingDms ? 'Unlocking...' : 'Unlock chats'}
+                          </button>
+                        </div>
                       </div>
                     ) : filteredDmConversations.length > 0 ? (
                       filteredDmConversations.map((conversation) => {
@@ -1026,6 +1390,10 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                     <div className="flex h-full items-center justify-center px-6 text-center text-gray-400">
                       This snapshot does not include chats.
                     </div>
+                  ) : chatsLocked ? (
+                    <div className="flex h-full items-center justify-center px-6 text-center text-cyan-100/80">
+                      Chats are encrypted. Unlock them from the left panel.
+                    </div>
                   ) : selectedConversation ? (
                     <>
                       <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
@@ -1066,7 +1434,9 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                       </div>
 
                       <footer className="border-t border-white/10 px-4 py-3">
-                        <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-gray-500">Unencrypted message</div>
+                        <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-gray-500">
+                          Read-only conversation view
+                        </div>
                       </footer>
                     </>
                   ) : (
@@ -1174,7 +1544,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 </div>
               </div>
 
-              {backup.archive_file_path && (
+              {plainArchiveDownloadAvailable && (
                 <button
                   onClick={handleDownloadArchive}
                   disabled={isDownloading}
@@ -1182,6 +1552,76 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 >
                   {isDownloading ? 'Downloading archive...' : 'Download archive ZIP'}
                 </button>
+              )}
+
+              {hasEncryptedArchive && (
+                <div className="rounded-2xl border border-cyan-400/35 bg-cyan-500/10 p-4">
+                  <p className="text-sm font-semibold text-cyan-100">Encrypted archive ZIP</p>
+                  <p className="mt-1 text-xs text-cyan-100/85">
+                    Decrypt locally with your passphrase or recovery key.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setArchiveUnlockMode('passphrase')
+                        setArchiveUnlockError(null)
+                      }}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        archiveUnlockMode === 'passphrase'
+                          ? 'bg-cyan-400 text-slate-950'
+                          : 'border border-cyan-300/40 text-cyan-100'
+                      }`}
+                    >
+                      Passphrase
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setArchiveUnlockMode('recovery')
+                        setArchiveUnlockError(null)
+                      }}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        archiveUnlockMode === 'recovery'
+                          ? 'bg-cyan-400 text-slate-950'
+                          : 'border border-cyan-300/40 text-cyan-100'
+                      }`}
+                    >
+                      Recovery key
+                    </button>
+                  </div>
+                  <input
+                    type={archiveUnlockMode === 'passphrase' ? 'password' : 'text'}
+                    value={archiveUnlockSecret}
+                    onChange={(e) => setArchiveUnlockSecret(e.target.value)}
+                    placeholder={archiveUnlockMode === 'passphrase' ? 'Enter passphrase' : 'Enter recovery key'}
+                    className="mt-3 w-full rounded-lg border border-cyan-200/30 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-cyan-100/60"
+                  />
+                  {archiveUnlockError && (
+                    <p className="mt-2 text-xs text-rose-300">{archiveUnlockError}</p>
+                  )}
+                  {downloadingEncryptedArchive && (
+                    <div className="mt-2">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-white/20">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-400 transition-all"
+                          style={{ width: `${Math.max(0, Math.min(100, encryptedArchiveDownloadProgress))}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-[11px] text-cyan-100/90">
+                        {Math.max(0, Math.min(100, encryptedArchiveDownloadProgress))}% downloaded
+                      </p>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadEncryptedArchive()}
+                    disabled={downloadingEncryptedArchive}
+                    className="mt-3 w-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {downloadingEncryptedArchive ? 'Decrypting and saving...' : 'Decrypt and download ZIP'}
+                  </button>
+                </div>
               )}
             </section>
 
@@ -1366,7 +1806,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 </div>
               </div>
 
-              {backup.archive_file_path && (
+              {plainArchiveDownloadAvailable && (
                 <button
                   onClick={handleDownloadArchive}
                   disabled={isDownloading}
@@ -1374,6 +1814,76 @@ export function BackupViewer({ backup }: BackupViewerProps) {
                 >
                   {isDownloading ? 'Downloading archive...' : 'Download archive ZIP'}
                 </button>
+              )}
+
+              {hasEncryptedArchive && (
+                <div className="rounded-2xl border border-cyan-400/35 bg-cyan-500/10 p-4">
+                  <p className="text-sm font-semibold text-cyan-100">Encrypted archive ZIP</p>
+                  <p className="mt-1 text-xs text-cyan-100/85">
+                    Decrypt locally with your passphrase or recovery key.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setArchiveUnlockMode('passphrase')
+                        setArchiveUnlockError(null)
+                      }}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        archiveUnlockMode === 'passphrase'
+                          ? 'bg-cyan-400 text-slate-950'
+                          : 'border border-cyan-300/40 text-cyan-100'
+                      }`}
+                    >
+                      Passphrase
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setArchiveUnlockMode('recovery')
+                        setArchiveUnlockError(null)
+                      }}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        archiveUnlockMode === 'recovery'
+                          ? 'bg-cyan-400 text-slate-950'
+                          : 'border border-cyan-300/40 text-cyan-100'
+                      }`}
+                    >
+                      Recovery key
+                    </button>
+                  </div>
+                  <input
+                    type={archiveUnlockMode === 'passphrase' ? 'password' : 'text'}
+                    value={archiveUnlockSecret}
+                    onChange={(e) => setArchiveUnlockSecret(e.target.value)}
+                    placeholder={archiveUnlockMode === 'passphrase' ? 'Enter passphrase' : 'Enter recovery key'}
+                    className="mt-3 w-full rounded-lg border border-cyan-200/30 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-cyan-100/60"
+                  />
+                  {archiveUnlockError && (
+                    <p className="mt-2 text-xs text-rose-300">{archiveUnlockError}</p>
+                  )}
+                  {downloadingEncryptedArchive && (
+                    <div className="mt-2">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-white/20">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-400 transition-all"
+                          style={{ width: `${Math.max(0, Math.min(100, encryptedArchiveDownloadProgress))}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-[11px] text-cyan-100/90">
+                        {Math.max(0, Math.min(100, encryptedArchiveDownloadProgress))}% downloaded
+                      </p>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadEncryptedArchive()}
+                    disabled={downloadingEncryptedArchive}
+                    className="mt-3 w-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {downloadingEncryptedArchive ? 'Decrypting and saving...' : 'Decrypt and download ZIP'}
+                  </button>
+                </div>
               )}
 
               <div className="rounded-2xl border border-white/10 bg-black p-5">

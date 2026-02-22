@@ -13,6 +13,14 @@ import {
 import { deleteBackupAndStorageById } from '@/lib/backups/delete-backup-data'
 import { recalculateAndPersistBackupStorage } from '@/lib/storage/usage'
 import { createAdminClient } from '@/lib/supabase/admin'
+import {
+  normalizeArchiveImportSelection,
+  normalizeDmEncryptionUploadMetadata,
+  normalizeEncryptedDirectMessagesPayload,
+  type ArchiveImportSelection,
+  type DmEncryptionUploadMetadata,
+  type EncryptedDirectMessagesPayload,
+} from '@/lib/platforms/twitter/archive-import'
 import { TWITTER_UPLOAD_LIMITS } from '@/lib/platforms/twitter/limits'
 import { buildInternalMediaUrl } from '@/lib/storage/media-url'
 import {
@@ -599,11 +607,25 @@ export async function processArchiveUploadJob(params: {
   userId: string
   username: string
   inputStoragePath: string
+  importSelection?: ArchiveImportSelection
+  dmEncryption?: DmEncryptionUploadMetadata | null
+  preserveArchiveFile?: boolean
 }) {
   const { jobId, userId, username, inputStoragePath } = params
+  const importSelection = normalizeArchiveImportSelection(params.importSelection)
+  const dmEncryption = normalizeDmEncryptionUploadMetadata(params.dmEncryption)
+  const hasEncryptedDmImport = Boolean(importSelection.direct_messages && dmEncryption)
+  if (importSelection.direct_messages && !dmEncryption) {
+    throw new Error('DM encryption metadata missing for chat import.')
+  }
+  const preserveArchiveFile =
+    typeof params.preserveArchiveFile === 'boolean'
+      ? params.preserveArchiveFile
+      : true
 
   let tmpPath = ''
   let createdBackupId: string | null = null
+  let archiveContainsDirectMessages = false
 
   try {
     await markBackupJobProcessing(supabase, jobId, 5, 'Downloading uploaded archive...')
@@ -629,6 +651,7 @@ export async function processArchiveUploadJob(params: {
       likes: [],
       directMessages: [],
     }
+    let hasCoreArchiveFiles = false
 
     try {
       const entries = await listZipEntries(tmpPath)
@@ -641,11 +664,24 @@ export async function processArchiveUploadJob(params: {
         likes: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.likes),
         directMessages: findMetadataEntries(entries, ARCHIVE_METADATA_FILE_PATTERNS.directMessages),
       }
+      archiveContainsDirectMessages = metadataEntriesByBucket.directMessages.length > 0
+      hasCoreArchiveFiles =
+        metadataEntriesByBucket.account.length > 0 || metadataEntriesByBucket.tweets.length > 0
+
+      const shouldLoadBucket: Record<ArchiveMetadataBucket, boolean> = {
+        account: true,
+        tweets: importSelection.tweets,
+        followers: importSelection.followers,
+        following: importSelection.following,
+        likes: importSelection.likes,
+        directMessages: importSelection.direct_messages && !hasEncryptedDmImport,
+      }
 
       for (const [bucket, bucketEntries] of Object.entries(metadataEntriesByBucket) as Array<[
         ArchiveMetadataBucket,
         any[],
       ]>) {
+        if (!shouldLoadBucket[bucket]) continue
         for (const entry of bucketEntries) {
           await ensureArchiveJobNotCancelled(jobId)
 
@@ -668,7 +704,6 @@ export async function processArchiveUploadJob(params: {
     await markBackupJobProgress(supabase, jobId, 30, 'Parsing archive metadata...')
     await ensureArchiveJobNotCancelled(jobId)
 
-    const hasCoreArchiveFiles = files.account.length > 0 || files.tweets.length > 0
     if (!hasCoreArchiveFiles) {
       throw new Error("This doesn't look like a Twitter archive. Upload the ZIP file downloaded from Twitter.")
     }
@@ -704,7 +739,7 @@ export async function processArchiveUploadJob(params: {
     }
 
     let tweets: any[] = []
-    if (files.tweets.length > 0) {
+    if (importSelection.tweets && files.tweets.length > 0) {
       const tweetsData = files.tweets.flatMap(parseTwitterJSON)
       tweets = tweetsData
         .map((item: any) => {
@@ -743,7 +778,7 @@ export async function processArchiveUploadJob(params: {
     }
 
     let followers: any[] = []
-    if (files.followers.length > 0) {
+    if (importSelection.followers && files.followers.length > 0) {
       const followersData = files.followers.flatMap(parseTwitterJSON)
       followers = followersData
         .map((item: any) => {
@@ -762,7 +797,7 @@ export async function processArchiveUploadJob(params: {
     }
 
     let following: any[] = []
-    if (files.following.length > 0) {
+    if (importSelection.following && files.following.length > 0) {
       const followingData = files.following.flatMap(parseTwitterJSON)
       following = followingData
         .map((item: any) => {
@@ -781,7 +816,7 @@ export async function processArchiveUploadJob(params: {
     }
 
     let likes: any[] = []
-    if (files.likes.length > 0) {
+    if (importSelection.likes && files.likes.length > 0) {
       const likesData = files.likes.flatMap(parseTwitterJSON)
       likes = likesData
         .map((item: any) => ({
@@ -792,8 +827,26 @@ export async function processArchiveUploadJob(params: {
       stats.likes = likes.length
     }
 
+    let encryptedDirectMessages: EncryptedDirectMessagesPayload | null = null
+    if (hasEncryptedDmImport && dmEncryption) {
+      const encryptedDmBuffer = await downloadObjectFromR2(dmEncryption.encrypted_input_path)
+      if (!encryptedDmBuffer) {
+        throw new Error('Failed to load encrypted DM payload.')
+      }
+
+      const parsedEncryptedDmPayload = normalizeEncryptedDirectMessagesPayload(
+        JSON.parse(encryptedDmBuffer.toString('utf8')),
+      )
+      if (!parsedEncryptedDmPayload) {
+        throw new Error('Encrypted DM payload is invalid.')
+      }
+
+      encryptedDirectMessages = parsedEncryptedDmPayload
+      stats.dms = dmEncryption.message_count || parsedEncryptedDmPayload.metadata.message_count
+    }
+
     let directMessages: any[] = []
-    if (files.directMessages.length > 0) {
+    if (importSelection.direct_messages && !hasEncryptedDmImport && files.directMessages.length > 0) {
       const dmsData = files.directMessages.flatMap(parseTwitterJSON)
       directMessages = dmsData
         .map((item: any) => {
@@ -850,6 +903,8 @@ export async function processArchiveUploadJob(params: {
           .single()
       : { data: null }
 
+    const initialStoredDirectMessages = hasEncryptedDmImport ? [] : directMessages
+
     const { data: backupData, error: backupError } = await supabase
       .from('backups')
       .insert({
@@ -857,7 +912,16 @@ export async function processArchiveUploadJob(params: {
         social_profile_id: socialProfile?.id || null,
         backup_type: 'full_archive',
         source: 'archive',
-        data: { tweets, followers, following, likes, direct_messages: directMessages },
+        data: {
+          tweets,
+          followers,
+          following,
+          likes,
+          direct_messages: initialStoredDirectMessages,
+          encrypted_direct_messages: encryptedDirectMessages,
+          import_selection: importSelection,
+          archive_contains_direct_messages: archiveContainsDirectMessages,
+        },
       })
       .select()
       .single()
@@ -872,27 +936,41 @@ export async function processArchiveUploadJob(params: {
     await mergeBackupJobPayload(supabase, jobId, { partial_backup_id: backupId })
     await ensureArchiveJobNotCancelled(jobId)
 
-    await markBackupJobProgress(supabase, jobId, 55, 'Uploading archive media files...')
+    let mediaFiles: MediaMetadataRecord[] = []
+    let uploadedCount = 0
 
-    const { mediaFiles, uploadedCount } = await extractMediaFiles(
-      tmpPath,
-      userId,
-      backupId,
-      async (processed, total) => {
-        if (total <= 0) return
-        const ratio = processed / total
-        const progress = 55 + Math.round(ratio * 30)
-        await markBackupJobProgress(supabase, jobId, Math.min(progress, 85), `Uploading media files (${processed}/${total})...`)
-      },
-      async () => ensureArchiveJobNotCancelled(jobId),
-    )
+    if (importSelection.media) {
+      await markBackupJobProgress(supabase, jobId, 55, 'Uploading archive media files...')
+
+      const mediaResult = await extractMediaFiles(
+        tmpPath,
+        userId,
+        backupId,
+        async (processed, total) => {
+          if (total <= 0) return
+          const ratio = processed / total
+          const progress = 55 + Math.round(ratio * 30)
+          await markBackupJobProgress(supabase, jobId, Math.min(progress, 85), `Uploading media files (${processed}/${total})...`)
+        },
+        async () => ensureArchiveJobNotCancelled(jobId),
+      )
+      mediaFiles = mediaResult.mediaFiles
+      uploadedCount = mediaResult.uploadedCount
+    } else {
+      await markBackupJobProgress(supabase, jobId, 85, 'Skipping media import by request...')
+    }
 
     console.log(`Processed ${uploadedCount} media files (${mediaFiles.length} new records inserted)`)
 
     await markBackupJobProgress(supabase, jobId, 88, 'Finalizing backup data...')
     await ensureArchiveJobNotCancelled(jobId)
 
-    const { tweets: updatedTweets, directMessages: updatedDMs } = updateMediaUrls(tweets, directMessages, mediaFiles)
+    const mediaUpdatedPayload = importSelection.media
+      ? updateMediaUrls(tweets, directMessages, mediaFiles)
+      : { tweets, directMessages }
+    const updatedTweets = mediaUpdatedPayload.tweets
+    const updatedDMs = mediaUpdatedPayload.directMessages
+    const persistedDirectMessages = hasEncryptedDmImport ? [] : updatedDMs
 
     const profileMediaFiles = mediaFiles.filter((f) => f.media_type === 'profile_media')
     const getMediaUrl = (storagePath: string): string => buildInternalMediaUrl(storagePath)
@@ -936,37 +1014,40 @@ export async function processArchiveUploadJob(params: {
 
     const updatedStats = {
       ...stats,
-      media_files: mediaFiles.length,
+      media_files: importSelection.media ? mediaFiles.length : 0,
     }
 
-    const archiveStoragePath = `${userId}/archives/${backupId}.zip`
-    await uploadObjectToR2({
-      key: archiveStoragePath,
-      body: buffer,
-      contentType: 'application/zip',
-      upsert: false,
-    })
+    let archiveStoragePath: string | null = null
+    if (preserveArchiveFile) {
+      archiveStoragePath = `${userId}/archives/${backupId}.zip`
+      await uploadObjectToR2({
+        key: archiveStoragePath,
+        body: buffer,
+        contentType: 'application/zip',
+        upsert: false,
+      })
 
-    const { data: existingArchiveRecord } = await supabase
-      .from('media_files')
-      .select('id')
-      .eq('backup_id', backupId)
-      .eq('file_path', archiveStoragePath)
-      .maybeSingle()
+      const { data: existingArchiveRecord } = await supabase
+        .from('media_files')
+        .select('id')
+        .eq('backup_id', backupId)
+        .eq('file_path', archiveStoragePath)
+        .maybeSingle()
 
-    if (!existingArchiveRecord) {
-      const archiveMetadataRecord: MediaMetadataRecord = {
-        user_id: userId,
-        backup_id: backupId,
-        file_path: archiveStoragePath,
-        file_name: `${backupId}.zip`,
-        file_size: buffer.length,
-        mime_type: 'application/zip',
-        media_type: 'archive_file',
-      }
+      if (!existingArchiveRecord) {
+        const archiveMetadataRecord: MediaMetadataRecord = {
+          user_id: userId,
+          backup_id: backupId,
+          file_path: archiveStoragePath,
+          file_name: `${backupId}.zip`,
+          file_size: buffer.length,
+          mime_type: 'application/zip',
+          media_type: 'archive_file',
+        }
 
-      if (!(await insertMediaFileRecord(archiveMetadataRecord))) {
-        console.error('Failed to insert archive media record after fallback attempts')
+        if (!(await insertMediaFileRecord(archiveMetadataRecord))) {
+          console.error('Failed to insert archive media record after fallback attempts')
+        }
       }
     }
 
@@ -976,11 +1057,14 @@ export async function processArchiveUploadJob(params: {
         followers,
         following,
         likes,
-        direct_messages: updatedDMs,
+        direct_messages: persistedDirectMessages,
+        encrypted_direct_messages: encryptedDirectMessages,
         profile: archiveProfile,
         stats: updatedStats,
+        import_selection: importSelection,
+        archive_contains_direct_messages: archiveContainsDirectMessages,
         archive_file_path: archiveStoragePath,
-        uploaded_file_size: buffer.length,
+        uploaded_file_size: preserveArchiveFile ? buffer.length : 0,
       },
     }
 
@@ -1014,6 +1098,10 @@ export async function processArchiveUploadJob(params: {
     })
     await markBackupJobCompleted(supabase, jobId, backupId, 'Archive backup completed successfully.')
   } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes('DM encryption metadata missing for chat import.')) {
+      console.error('[Archive Job] Missing DM encryption metadata for chat import.')
+    }
     if (error instanceof JobCancelledError) {
       console.log(`[Archive Job] Cancellation requested for ${jobId}. Cleaning up...`)
       await markBackupJobCleanup(supabase, jobId, 'Cancellation requested. Cleaning up partial data...')
@@ -1050,7 +1138,10 @@ export async function processArchiveUploadJob(params: {
     }
 
     try {
-      await deleteObjectsFromR2([inputStoragePath])
+      await deleteObjectsFromR2([
+        inputStoragePath,
+        ...(dmEncryption?.encrypted_input_path ? [dmEncryption.encrypted_input_path] : []),
+      ])
     } catch (removeInputError) {
       console.warn(`[Archive Job] Failed to clean up staged input ${inputStoragePath}:`, removeInputError)
     }

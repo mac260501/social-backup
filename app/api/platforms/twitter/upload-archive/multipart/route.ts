@@ -39,6 +39,10 @@ type MultipartCompleteBody = {
   fileType?: string
   fileSize?: number
   username?: string
+  startProcessing?: boolean
+  importSelection?: unknown
+  dmEncryption?: unknown
+  preserveArchiveFile?: boolean
   parts?: Array<{
     partNumber?: number
     etag?: string
@@ -60,6 +64,8 @@ function statusForArchiveError(message: string): number {
   if (message.includes('size limit')) return 413
   if (message.includes('Storage limit exceeded')) return 413
   if (message.includes('Invalid staged upload path')) return 400
+  if (message.includes('Invalid DM encryption payload')) return 400
+  if (message.includes('DM encryption is required when importing chats')) return 400
   if (message.includes('Uploaded file not found')) return 404
   if (message.includes('Unauthorized')) return 401
   if (message.includes('Inngest API Error')) return 502
@@ -167,6 +173,7 @@ export async function POST(request: Request) {
       const fileName = typeof body.fileName === 'string' ? body.fileName.trim() : ''
       const fileType = typeof body.fileType === 'string' ? body.fileType.trim() : ''
       const fileSize = typeof body.fileSize === 'number' ? body.fileSize : 0
+      const startProcessing = body.startProcessing !== false
       const username =
         (typeof body.username === 'string' && body.username.trim()) ||
         user.email?.split('@')[0] ||
@@ -200,6 +207,15 @@ export async function POST(request: Request) {
           ? metadata.contentLength
           : fileSize
 
+      if (!startProcessing) {
+        return NextResponse.json({
+          success: true,
+          stagedInputPath,
+          fileSize: resolvedSize,
+          message: 'Archive upload complete. Review archive contents before importing.',
+        })
+      }
+
       await validateArchiveUploadRequest({
         userId: user.id,
         fileName,
@@ -213,6 +229,9 @@ export async function POST(request: Request) {
         fileName,
         fileSize: resolvedSize,
         stagedInputPath,
+        importSelection: body.importSelection,
+        dmEncryption: body.dmEncryption,
+        preserveArchiveFile: body.preserveArchiveFile,
       })
 
       return NextResponse.json({

@@ -1,11 +1,12 @@
-import { ExternalLink, FileArchive, Globe } from 'lucide-react'
+import { ExternalLink, FileArchive, Globe, LockKeyhole, ShieldCheck } from 'lucide-react'
 import {
   formatBackupMethodLabel,
   formatPartialReasonLabel,
   getBackupPartialDetails,
   isArchiveBackup,
 } from '@/lib/platforms/backup'
-import { useState, type ChangeEvent } from 'react'
+import { useEffect, useState, type ChangeEvent } from 'react'
+import type { ArchiveImportSelection, ArchivePreviewData } from '@/lib/platforms/twitter/archive-import'
 
 export type TwitterScrapeTargets = {
   profile: boolean
@@ -36,6 +37,8 @@ export type DashboardBackupItem = {
     profile?: {
       username?: string
     }
+    archive_file_path?: string
+    encrypted_archive?: unknown
     uploaded_file_size?: number
     storage?: {
       payload_bytes?: number | string
@@ -72,12 +75,25 @@ export type UploadResult = {
   success: boolean
   message?: string
   error?: string
+  job?: {
+    id: string
+    status: 'queued' | 'processing' | 'completed' | 'failed'
+    progress: number
+    message?: string | null
+  }
 }
 
 export type ScrapeResult = {
   success: boolean
   message?: string
   error?: string
+}
+
+export type EncryptedArchiveTaskState = {
+  status: 'waiting_backup' | 'prompt' | 'running' | 'completed' | 'failed'
+  progressPercent: number
+  detail?: string | null
+  error?: string | null
 }
 
 type ApiUsageSummary = {
@@ -87,6 +103,21 @@ type ApiUsageSummary = {
   remainingUsd?: number
 }
 
+type StagedArchiveState = {
+  stagedInputPath: string
+  fileName: string
+  fileType: string
+  fileSize: number
+  preview: ArchivePreviewData
+  importSelection: ArchiveImportSelection
+  dmEncryptionEnabled: boolean
+  dmPassphrase: string
+  dmPassphraseConfirm: string
+  dmRecoveryKey: string
+  dmRecoveryKeySaved: boolean
+  storeEncryptedArchive: boolean
+}
+
 type TwitterPanelProps = {
   backupsCount: number
   loadingBackups: boolean
@@ -94,9 +125,13 @@ type TwitterPanelProps = {
   jobs: BackupJobItem[]
   activeJob: BackupJobItem | null
   uploading: boolean
+  analyzingArchive: boolean
+  startingArchiveImport: boolean
   uploadProgressPercent: number
   uploadProgressDetail: string | null
   uploadResult: UploadResult | null
+  stagedArchive: StagedArchiveState | null
+  encryptedArchiveTask: EncryptedArchiveTaskState | null
   scraping: boolean
   scrapeResult: ScrapeResult | null
   twitterUsername: string
@@ -110,6 +145,16 @@ type TwitterPanelProps = {
   onDownloadBackup: (backupId: string) => Promise<void>
   onDeleteBackup: (backupId: string, label: string) => Promise<void>
   onUploadChange: (e: ChangeEvent<HTMLInputElement>) => Promise<void>
+  onArchiveSelectionChange: (key: keyof ArchiveImportSelection, value: boolean) => void
+  onDmEncryptionEnabledChange: (enabled: boolean) => void
+  onDmPassphraseChange: (value: string) => void
+  onDmPassphraseConfirmChange: (value: string) => void
+  onDmRecoverySavedChange: (value: boolean) => void
+  onStoreEncryptedArchiveChange: (value: boolean) => void
+  onArchiveImportStart: () => Promise<void>
+  onArchiveDiscard: () => Promise<void>
+  onEncryptedArchiveStoreStart: () => Promise<void>
+  onEncryptedArchiveDismiss: () => void
   onScrapeNow: (targets: TwitterScrapeTargets) => Promise<void>
 }
 
@@ -120,9 +165,13 @@ export function TwitterPanel({
   jobs,
   activeJob,
   uploading,
+  analyzingArchive,
+  startingArchiveImport,
   uploadProgressPercent,
   uploadProgressDetail,
   uploadResult,
+  stagedArchive,
+  encryptedArchiveTask,
   scraping,
   scrapeResult,
   twitterUsername,
@@ -136,9 +185,20 @@ export function TwitterPanel({
   onDownloadBackup,
   onDeleteBackup,
   onUploadChange,
+  onArchiveSelectionChange,
+  onDmEncryptionEnabledChange,
+  onDmPassphraseChange,
+  onDmPassphraseConfirmChange,
+  onDmRecoverySavedChange,
+  onStoreEncryptedArchiveChange,
+  onArchiveImportStart,
+  onArchiveDiscard,
+  onEncryptedArchiveStoreStart,
+  onEncryptedArchiveDismiss,
   onScrapeNow,
 }: TwitterPanelProps) {
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null)
+  const [recoveryKeyCopied, setRecoveryKeyCopied] = useState(false)
   const formatUsd = (value?: number) => {
     if (typeof value !== 'number' || Number.isNaN(value) || value < 0) return '$0.00'
     return `$${value.toFixed(2)}`
@@ -157,6 +217,41 @@ export function TwitterPanel({
   const selectedTargetCount = Object.values(scrapeTargets).filter(Boolean).length
   const hasSelectedTargets = selectedTargetCount > 0
   const hasActiveJob = Boolean(activeJob && (activeJob.status === 'queued' || activeJob.status === 'processing'))
+  const hasStagedArchive = Boolean(stagedArchive)
+  const encryptedArchiveVisualProgress = encryptedArchiveTask
+    ? encryptedArchiveTask.status === 'running'
+      ? Math.max(1, Math.min(100, Math.round(encryptedArchiveTask.progressPercent)))
+      : encryptedArchiveTask.status === 'completed'
+        ? 100
+        : encryptedArchiveTask.status === 'failed'
+          ? Math.max(5, Math.min(100, Math.round(encryptedArchiveTask.progressPercent)))
+          : encryptedArchiveTask.status === 'prompt'
+            ? 12
+            : 4
+    : 0
+  const encryptedArchiveProgressLabel = encryptedArchiveTask
+    ? encryptedArchiveTask.status === 'waiting_backup'
+      ? 'Queued'
+      : encryptedArchiveTask.status === 'prompt'
+        ? 'Ready'
+        : encryptedArchiveTask.status === 'running'
+          ? `${Math.max(0, Math.min(100, Math.round(encryptedArchiveTask.progressPercent)))}%`
+          : encryptedArchiveTask.status === 'completed'
+            ? 'Complete'
+            : 'Action needed'
+    : ''
+  const selectedArchiveSectionCount = stagedArchive
+    ? Object.values(stagedArchive.importSelection).filter(Boolean).length
+    : 0
+  const dmEncryptionRequired = Boolean(stagedArchive?.importSelection.direct_messages)
+  const dmEncryptionReady = Boolean(
+    stagedArchive &&
+      (!dmEncryptionRequired ||
+        (stagedArchive.dmEncryptionEnabled &&
+          stagedArchive.dmPassphrase.trim().length >= 8 &&
+          stagedArchive.dmPassphrase === stagedArchive.dmPassphraseConfirm &&
+          stagedArchive.dmRecoveryKeySaved)),
+  )
   const inProgressJobs = jobs.filter((job) => job.status === 'queued' || job.status === 'processing')
   const activeProgress = Math.max(0, Math.min(100, Number(activeJob?.progress) || 0))
   const activePayload = toRecord(activeJob?.payload)
@@ -209,6 +304,44 @@ export function TwitterPanel({
     const payloadEstimate = estimatePayloadBytes(backup.data)
     if (payloadEstimate > 0) return payloadEstimate
     return 0
+  }
+
+  useEffect(() => {
+    setRecoveryKeyCopied(false)
+  }, [stagedArchive?.stagedInputPath])
+
+  const handleCopyRecoveryKey = async () => {
+    if (!stagedArchive?.dmRecoveryKey) return
+    try {
+      await navigator.clipboard.writeText(stagedArchive.dmRecoveryKey)
+      setRecoveryKeyCopied(true)
+      setTimeout(() => setRecoveryKeyCopied(false), 2000)
+    } catch {
+      setRecoveryKeyCopied(false)
+    }
+  }
+
+  const handleDownloadRecoveryKey = () => {
+    if (!stagedArchive?.dmRecoveryKey) return
+
+    const contents = [
+      'Social Backup DM Recovery Key',
+      '',
+      `Recovery Key: ${stagedArchive.dmRecoveryKey}`,
+      '',
+      'Keep this key private and store it offline.',
+      'You can use it to unlock encrypted DMs if you forget your passphrase.',
+    ].join('\n')
+
+    const blob = new Blob([contents], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'social-backup-dm-recovery-key.txt'
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -267,6 +400,28 @@ export function TwitterPanel({
               style={{ width: `${activeProgress}%` }}
             />
           </div>
+          {encryptedArchiveTask && (
+            <div className="mt-3 rounded-xl border border-cyan-300/35 bg-cyan-500/10 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-cyan-900 dark:text-cyan-100">
+                Encrypted ZIP storage
+              </p>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/15">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    encryptedArchiveTask.status === 'failed'
+                      ? 'bg-rose-400'
+                      : encryptedArchiveTask.status === 'completed'
+                        ? 'bg-emerald-400'
+                        : 'bg-gradient-to-r from-cyan-400 to-blue-400'
+                  }`}
+                  style={{ width: `${encryptedArchiveVisualProgress}%` }}
+                />
+              </div>
+              <p className="mt-1 text-xs text-cyan-900 dark:text-cyan-100">
+                {encryptedArchiveProgressLabel}
+              </p>
+            </div>
+          )}
           {!activeIsArchiveJob && (
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-blue-700 dark:text-blue-200 sm:grid-cols-3">
               <p>Tweets: {formatCount(activeLiveMetrics.tweets_fetched)}</p>
@@ -283,7 +438,74 @@ export function TwitterPanel({
         </section>
       )}
 
-      <section className="grid gap-7 xl:grid-cols-2">
+      {encryptedArchiveTask && (
+        <section className="rounded-3xl border border-cyan-300/35 bg-cyan-500/10 p-5">
+          <p className="text-sm font-semibold text-cyan-900 dark:text-cyan-100">
+            Encrypted original archive
+          </p>
+          <p className="mt-1 text-xs text-cyan-800/90 dark:text-cyan-100/90">
+            {encryptedArchiveTask.detail ||
+              (encryptedArchiveTask.status === 'waiting_backup'
+                ? 'Waiting for your backup job to finish before storing the encrypted ZIP.'
+                : encryptedArchiveTask.status === 'prompt'
+                  ? 'Store your original ZIP in encrypted chunks so only you can decrypt it.'
+                  : encryptedArchiveTask.status === 'running'
+                    ? 'Encrypting and uploading chunks in the background.'
+                    : encryptedArchiveTask.status === 'completed'
+                      ? 'Encrypted archive is now stored and recoverable only with your key.'
+                      : 'Encrypted archive storage failed. You can retry.')}
+          </p>
+
+          <div className="mt-2">
+            <div className="h-2 overflow-hidden rounded-full bg-white/15">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  encryptedArchiveTask.status === 'failed'
+                    ? 'bg-rose-400'
+                    : encryptedArchiveTask.status === 'completed'
+                      ? 'bg-emerald-400'
+                      : 'bg-gradient-to-r from-cyan-400 to-blue-400'
+                }`}
+                style={{ width: `${encryptedArchiveVisualProgress}%` }}
+              />
+            </div>
+            <p className="mt-1 text-xs text-cyan-900 dark:text-cyan-100">
+              {encryptedArchiveProgressLabel}
+            </p>
+          </div>
+
+          {encryptedArchiveTask.status === 'failed' && encryptedArchiveTask.error && (
+            <p className="mt-2 text-xs text-rose-600 dark:text-rose-300">
+              {encryptedArchiveTask.error}
+            </p>
+          )}
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(encryptedArchiveTask.status === 'prompt' || encryptedArchiveTask.status === 'failed') && (
+              <button
+                type="button"
+                onClick={() => onEncryptedArchiveStoreStart()}
+                className="rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-4 py-1.5 text-xs font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1]"
+              >
+                Store encrypted archive
+              </button>
+            )}
+            {(encryptedArchiveTask.status === 'prompt' ||
+              encryptedArchiveTask.status === 'completed' ||
+              encryptedArchiveTask.status === 'failed') && (
+              <button
+                type="button"
+                onClick={onEncryptedArchiveDismiss}
+                className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-4 py-1.5 text-xs font-semibold text-cyan-900 hover:bg-cyan-500/20 dark:text-cyan-100"
+              >
+                {encryptedArchiveTask.status === 'completed' ? 'Dismiss' : 'Skip'}
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
+      <section className="grid items-start gap-7 xl:grid-cols-2">
         <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-white/5 sm:p-7">
           <h4 className="text-base font-semibold text-gray-900 dark:text-white">Upload Archive</h4>
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Best for complete history backup.</p>
@@ -342,42 +564,266 @@ export function TwitterPanel({
           </div>
 
           <div className="mt-6 rounded-2xl border-2 border-dashed border-gray-300 p-8 text-center dark:border-white/20">
+            <div className="mx-auto mb-4 flex max-w-xl items-start gap-3 rounded-2xl border border-emerald-300/60 bg-gradient-to-r from-emerald-50 to-teal-50 px-4 py-3 text-left shadow-[0_10px_25px_rgba(16,185,129,0.18)] dark:border-emerald-400/40 dark:from-emerald-500/15 dark:to-teal-500/15 dark:shadow-[0_10px_25px_rgba(16,185,129,0.22)]">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-300" />
+              <div>
+                <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                  We can&apos;t read your DMs. Period.
+                </p>
+                <p className="mt-1 text-xs font-medium leading-relaxed text-emerald-800 dark:text-emerald-100/90">
+                  If you choose encrypted archive storage, your original ZIP is also encrypted in your browser before
+                  upload.
+                </p>
+              </div>
+            </div>
             <input
               type="file"
               accept=".zip"
               onChange={onUploadChange}
-              disabled={uploading || hasActiveJob}
+              disabled={uploading || analyzingArchive || startingArchiveImport || hasActiveJob}
               className="hidden"
               id="file-upload"
             />
             <label
               htmlFor="file-upload"
-              className={`inline-block w-full rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1] sm:w-auto ${(uploading || hasActiveJob) ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+              className={`inline-block w-full rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1] sm:w-auto ${(uploading || analyzingArchive || startingArchiveImport || hasActiveJob) ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
             >
-              {uploading ? 'Uploading...' : hasActiveJob ? 'Job in progress...' : 'Choose ZIP File'}
+              {uploading
+                ? 'Uploading...'
+                : analyzingArchive
+                  ? 'Scanning archive...'
+                  : startingArchiveImport
+                    ? 'Starting import...'
+                : hasActiveJob
+                  ? 'Job in progress...'
+                  : hasStagedArchive
+                    ? 'Choose Different ZIP'
+                    : 'Choose ZIP File'}
             </label>
+            {stagedArchive && (
+              <p className="mt-3 text-xs text-gray-600 dark:text-gray-300">
+                Uploaded:{' '}
+                <span className="break-all font-medium text-gray-900 dark:text-white">
+                  {stagedArchive.fileName}
+                </span>
+              </p>
+            )}
           </div>
 
-          {uploading && (
+          {(uploading || analyzingArchive) && (
             <div className="mt-4 rounded-xl border border-blue-300/30 bg-blue-500/10 p-3">
               <div className="flex items-center justify-between text-xs text-blue-100/85">
-                <span>{uploadProgressDetail || 'Uploading archive...'}</span>
-                <span>{Math.max(0, Math.min(100, uploadProgressPercent))}%</span>
+                <span>{uploadProgressDetail || (analyzingArchive ? 'Scanning archive contents...' : 'Uploading archive...')}</span>
+                {uploading ? <span>{Math.max(0, Math.min(100, uploadProgressPercent))}%</span> : <span>Scanning</span>}
               </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/15">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-blue-400 to-cyan-300 transition-all"
-                  style={{ width: `${Math.max(0, Math.min(100, uploadProgressPercent))}%` }}
-                />
+              {uploading && (
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/15">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-blue-400 to-cyan-300 transition-all"
+                    style={{ width: `${Math.max(0, Math.min(100, uploadProgressPercent))}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {stagedArchive && (
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50/70 p-4 dark:border-white/10 dark:bg-white/5">
+              <p className="text-sm font-semibold text-gray-900 dark:text-white">Archive preview</p>
+              <p className="mt-1 text-sm text-gray-700 dark:text-gray-300">
+                This archive contains {stagedArchive.preview.stats.tweets.toLocaleString()} tweets,{' '}
+                {stagedArchive.preview.stats.dms.toLocaleString()} DMs, and{' '}
+                {stagedArchive.preview.stats.media_files.toLocaleString()} media files.
+              </p>
+
+              <div className="mt-4 rounded-xl border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-black/20">
+                <label className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">Skip DMs</span>
+                  <input
+                    type="checkbox"
+                    checked={!stagedArchive.importSelection.direct_messages}
+                    disabled={!stagedArchive.preview.available.direct_messages || hasActiveJob || startingArchiveImport}
+                    onChange={(e) => onArchiveSelectionChange('direct_messages', !e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </label>
+                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  DMs found: {stagedArchive.preview.stats.dms.toLocaleString()}
+                </p>
+              </div>
+
+              {stagedArchive.importSelection.direct_messages && (
+                <div className="mt-3 rounded-xl border border-cyan-300/40 bg-cyan-50/70 p-3 dark:border-cyan-400/30 dark:bg-cyan-500/10">
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-semibold text-cyan-900 dark:text-cyan-100">
+                      Encrypt DMs client-side
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={stagedArchive.dmEncryptionEnabled}
+                      disabled={hasActiveJob || startingArchiveImport}
+                      onChange={(e) => onDmEncryptionEnabledChange(e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
+                  <p className="mt-2 text-xs text-cyan-800/90 dark:text-cyan-100/90">
+                    Your passphrase and recovery key never leave your browser.
+                  </p>
+
+                  {stagedArchive.dmEncryptionEnabled && (
+                    <div className="mt-3 space-y-3">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <input
+                          type="password"
+                          value={stagedArchive.dmPassphrase}
+                          onChange={(e) => onDmPassphraseChange(e.target.value)}
+                          placeholder="Create passphrase"
+                          disabled={hasActiveJob || startingArchiveImport}
+                          className="w-full rounded-lg border border-cyan-300/50 bg-white/90 px-3 py-2 text-sm text-gray-900 outline-none focus:border-cyan-500 dark:border-cyan-200/25 dark:bg-black/40 dark:text-white"
+                        />
+                        <input
+                          type="password"
+                          value={stagedArchive.dmPassphraseConfirm}
+                          onChange={(e) => onDmPassphraseConfirmChange(e.target.value)}
+                          placeholder="Confirm passphrase"
+                          disabled={hasActiveJob || startingArchiveImport}
+                          className="w-full rounded-lg border border-cyan-300/50 bg-white/90 px-3 py-2 text-sm text-gray-900 outline-none focus:border-cyan-500 dark:border-cyan-200/25 dark:bg-black/40 dark:text-white"
+                        />
+                      </div>
+
+                      <div className="rounded-xl border-2 border-cyan-300/70 bg-gradient-to-r from-cyan-500/20 via-sky-500/10 to-blue-500/20 p-4 shadow-[0_14px_30px_rgba(8,145,178,0.22)] dark:border-cyan-200/45 dark:from-cyan-400/20 dark:via-sky-500/18 dark:to-blue-500/22">
+                        <label className="flex items-center justify-between gap-3">
+                          <div className="flex min-w-0 items-start gap-2.5">
+                            <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-cyan-300/70 bg-cyan-100/70 text-cyan-900 dark:border-cyan-200/45 dark:bg-cyan-500/20 dark:text-cyan-100">
+                              <LockKeyhole className="h-3.5 w-3.5" />
+                            </span>
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold tracking-wide text-cyan-900 dark:text-cyan-100">
+                                Store encrypted original ZIP
+                              </p>
+                              <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-cyan-800/90 dark:text-cyan-100/90">
+                                Optional but recommended
+                              </p>
+                            </div>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={stagedArchive.storeEncryptedArchive}
+                            onChange={(e) => onStoreEncryptedArchiveChange(e.target.checked)}
+                            disabled={hasActiveJob || startingArchiveImport}
+                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                        </label>
+                        <p className="mt-3 text-sm leading-relaxed text-cyan-900 dark:text-cyan-50">
+                          After import finishes, we encrypt your original ZIP in the background. Only you can decrypt
+                          and download it later.
+                        </p>
+                        <p className="mt-2 text-xs font-medium text-cyan-800/90 dark:text-cyan-100/90">
+                          Our team cannot read encrypted ZIP contents.
+                        </p>
+                      </div>
+
+                      <div className="rounded-lg border border-cyan-300/50 bg-white/80 p-3 dark:border-cyan-200/25 dark:bg-black/35">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-cyan-900 dark:text-cyan-100">
+                          Recovery key
+                        </p>
+                        <p className="mt-2 break-all font-mono text-sm text-cyan-950 dark:text-cyan-100">
+                          {stagedArchive.dmRecoveryKey}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCopyRecoveryKey}
+                            disabled={hasActiveJob || startingArchiveImport}
+                            className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-800 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:text-cyan-100"
+                          >
+                            {recoveryKeyCopied ? 'Copied' : 'Copy key'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleDownloadRecoveryKey}
+                            disabled={hasActiveJob || startingArchiveImport}
+                            className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-800 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:text-cyan-100"
+                          >
+                            Download .txt
+                          </button>
+                        </div>
+                        <label className="mt-3 flex items-start gap-2 text-xs text-cyan-900 dark:text-cyan-100">
+                          <input
+                            type="checkbox"
+                            checked={stagedArchive.dmRecoveryKeySaved}
+                            onChange={(e) => onDmRecoverySavedChange(e.target.checked)}
+                            disabled={hasActiveJob || startingArchiveImport}
+                            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span>I have saved my recovery key.</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {([
+                  ['tweets', 'Tweets', stagedArchive.preview.stats.tweets],
+                  ['followers', 'Followers', stagedArchive.preview.stats.followers],
+                  ['following', 'Following', stagedArchive.preview.stats.following],
+                  ['likes', 'Likes', stagedArchive.preview.stats.likes],
+                  ['media', 'Media files', stagedArchive.preview.stats.media_files],
+                ] as Array<[keyof ArchiveImportSelection, string, number]>).map(([key, label, count]) => (
+                  <label key={key} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-white/10">
+                    <span className="text-gray-700 dark:text-gray-300">{label} ({count.toLocaleString()})</span>
+                    <input
+                      type="checkbox"
+                      checked={stagedArchive.importSelection[key]}
+                      disabled={!stagedArchive.preview.available[key] || hasActiveJob || startingArchiveImport}
+                      onChange={(e) => onArchiveSelectionChange(key, e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </label>
+                ))}
+              </div>
+
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {selectedArchiveSectionCount} section{selectedArchiveSectionCount === 1 ? '' : 's'} selected
+                  </p>
+                  {dmEncryptionRequired && !dmEncryptionReady && (
+                    <p className="mt-1 text-xs text-amber-500 dark:text-amber-300">
+                      Set a passphrase and confirm your saved recovery key to continue.
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => onArchiveDiscard()}
+                    disabled={startingArchiveImport || hasActiveJob}
+                    className="rounded-full border border-gray-300 px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/20 dark:text-gray-200 dark:hover:bg-white/10"
+                  >
+                    Remove uploaded file
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onArchiveImportStart()}
+                    disabled={startingArchiveImport || hasActiveJob || selectedArchiveSectionCount === 0 || !dmEncryptionReady}
+                    className="rounded-full bg-gradient-to-b from-[#32a7ff] to-[#1576e8] px-5 py-2 text-xs font-semibold text-white shadow-[0_8px_22px_rgba(21,118,232,0.35)] transition hover:from-[#45b1ff] hover:to-[#1a7ff1] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {startingArchiveImport ? 'Starting import...' : hasActiveJob ? 'Job in progress...' : 'Start Import'}
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {uploadResult && (
-            <p className={`mt-4 text-sm ${uploadResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-              {uploadResult.success ? uploadResult.message || 'Archive uploaded successfully.' : uploadResult.error || 'Upload failed.'}
+          {uploadResult && !uploadResult.success && (
+            <p className="mt-4 text-sm text-red-600 dark:text-red-400">
+              {uploadResult.error || 'Upload failed.'}
             </p>
           )}
+
         </div>
 
         <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-white/5 sm:p-7">
@@ -418,9 +864,32 @@ export function TwitterPanel({
           <div className="mt-5 space-y-3">
             <input
               type="text"
+              name="username"
+              autoComplete="username"
+              tabIndex={-1}
+              aria-hidden="true"
+              className="absolute -left-[9999px] top-0 h-0 w-0 opacity-0"
+            />
+            <input
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              tabIndex={-1}
+              aria-hidden="true"
+              className="absolute -left-[9999px] top-0 h-0 w-0 opacity-0"
+            />
+            <input
+              type="text"
+              name="x-handle"
               value={twitterUsername}
               onChange={(e) => setTwitterUsername(e.target.value.replace(/^@/, ''))}
               placeholder="X username"
+              autoComplete="new-password"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              data-lpignore="true"
+              data-1p-ignore="true"
               disabled={scraping || hasActiveJob}
               className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 dark:border-white/20 dark:bg-black/40 dark:text-white"
             />
@@ -461,9 +930,9 @@ export function TwitterPanel({
             </button>
           </div>
 
-          {scrapeResult && (
-            <p className={`mt-4 text-sm ${scrapeResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-              {scrapeResult.success ? scrapeResult.message || 'Scrape completed.' : scrapeResult.error || 'Scrape failed.'}
+          {scrapeResult && !scrapeResult.success && (
+            <p className="mt-4 text-sm text-red-600 dark:text-red-400">
+              {scrapeResult.error || 'Scrape failed.'}
             </p>
           )}
         </div>
@@ -545,6 +1014,8 @@ export function TwitterPanel({
 
             {recentBackups.map((backup) => {
               const isArchive = isArchiveBackup(backup)
+              const hasEncryptedArchive = Boolean(backup.data?.encrypted_archive)
+              const canDownloadArchive = isArchive && !hasEncryptedArchive
               const methodLabel = formatBackupMethodLabel(backup)
               const dateValue = backup.uploaded_at || backup.created_at
               const formattedDate = dateValue
@@ -613,7 +1084,7 @@ export function TwitterPanel({
                     </a>
                     <button
                       onClick={() => onDownloadBackup(backup.id)}
-                      disabled={!isArchive}
+                      disabled={!canDownloadArchive}
                       className="rounded-full border border-gray-300 px-2 py-2 text-xs font-semibold text-gray-800 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/20 dark:text-white dark:hover:bg-white/10"
                     >
                       Download

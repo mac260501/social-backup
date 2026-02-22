@@ -2,7 +2,7 @@
 
 import Image from 'next/image'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
 import { ExternalLink, FileArchive, FolderArchive, Globe, LogOut, UserRound } from 'lucide-react'
@@ -15,6 +15,7 @@ import {
   TwitterPanel,
   type BackupJobItem,
   type DashboardBackupItem,
+  type EncryptedArchiveTaskState,
   type ScrapeResult,
   type TwitterScrapeTargets,
   type UploadResult,
@@ -29,10 +30,26 @@ import {
 import { listPlatformDefinitions } from '@/lib/platforms/registry'
 import type { PlatformId } from '@/lib/platforms/types'
 import {
+  deriveDefaultArchiveImportSelection,
+  hasSelectedArchiveImportCategory,
+  normalizeArchivePreviewData,
+  type ArchiveImportSelection,
+  type DmEncryptionUploadMetadata,
+  type ArchivePreviewData,
+} from '@/lib/platforms/twitter/archive-import'
+import { extractDirectMessagesFromArchiveFile } from '@/lib/platforms/twitter/archive-dm-extract'
+import {
+  encryptDirectMessagesForClientStorage,
+  generateRecoveryKey,
+} from '@/lib/platforms/twitter/dm-crypto'
+import {
+  discardStagedTwitterArchive,
   type DirectUploadProgress,
-  uploadTwitterArchiveDirect,
+  startTwitterArchiveImport,
+  uploadEncryptedDmPayloadToStaging,
+  uploadTwitterArchiveToStaging,
 } from '@/lib/platforms/twitter/direct-upload'
-import type { ArchiveWizardResolvedStep } from '@/lib/archive-wizard/types'
+import { encryptAndUploadArchiveInChunks } from '@/lib/platforms/twitter/encrypted-archive-upload'
 
 type DashboardTab = PlatformId | 'all-backups' | 'account'
 type AllBackupsFilter = 'all' | PlatformId
@@ -49,24 +66,38 @@ type StorageSummary = {
   limitBytes?: number
   remainingBytes?: number
 }
-type ArchiveWizardState = 'pending' | 'pending_extended' | 'ready' | 'completed' | 'skipped' | null
 type PendingDeleteState = {
   backupIds: string[]
   label: string
 }
-type ArchiveWizardStatusResponse = {
-  success?: boolean
-  status?: ArchiveWizardState
-  archiveRequestedAt?: string | null
-  hasArchiveBackup?: boolean
-  suggestedStep?: ArchiveWizardResolvedStep
-  activeArchiveJob?: {
-    id: string
-    status: 'queued' | 'processing' | 'completed' | 'failed'
-    progress: number
-    message?: string | null
-  } | null
-  schemaReady?: boolean
+
+type StagedArchiveState = {
+  stagedInputPath: string
+  fileName: string
+  fileType: string
+  fileSize: number
+  file: File
+  preview: ArchivePreviewData
+  importSelection: ArchiveImportSelection
+  dmEncryptionEnabled: boolean
+  dmPassphrase: string
+  dmPassphraseConfirm: string
+  dmRecoveryKey: string
+  dmRecoveryKeySaved: boolean
+  storeEncryptedArchive: boolean
+}
+
+type PendingEncryptedArchiveStorageState = {
+  jobId: string
+  backupId: string | null
+  knownBackupIdsAtQueue: string[]
+  file: File
+  passphrase: string
+  recoveryKey: string
+  status: EncryptedArchiveTaskState['status']
+  progressPercent: number
+  detail: string | null
+  error: string | null
 }
 const DEFAULT_TWITTER_SCRAPE_TARGETS: TwitterScrapeTargets = {
   profile: true,
@@ -158,16 +189,16 @@ export default function Dashboard() {
   const [apiUsage, setApiUsage] = useState<ApiUsageSummary | null>(null)
   const [reportedTotalStorageBytes, setReportedTotalStorageBytes] = useState<number | null>(null)
   const [reportedStorageLimitBytes, setReportedStorageLimitBytes] = useState<number>(5 * 1024 * 1024 * 1024)
-  const [archiveWizardStatus, setArchiveWizardStatus] = useState<ArchiveWizardState>(null)
-  const [archiveRequestedAt, setArchiveRequestedAt] = useState<string | null>(null)
-  const [archiveWizardSuggestedStep, setArchiveWizardSuggestedStep] = useState<ArchiveWizardResolvedStep>(1)
-  const [archiveWizardHasArchiveBackup, setArchiveWizardHasArchiveBackup] = useState(false)
-  const [archiveSetupMessage, setArchiveSetupMessage] = useState<string | null>(null)
 
   const [uploading, setUploading] = useState(false)
+  const [analyzingArchive, setAnalyzingArchive] = useState(false)
+  const [startingArchiveImport, setStartingArchiveImport] = useState(false)
   const [uploadProgressPercent, setUploadProgressPercent] = useState(0)
   const [uploadProgressDetail, setUploadProgressDetail] = useState<string | null>(null)
   const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
+  const [stagedArchive, setStagedArchive] = useState<StagedArchiveState | null>(null)
+  const [encryptedArchiveTask, setEncryptedArchiveTask] = useState<PendingEncryptedArchiveStorageState | null>(null)
+  const encryptedArchiveAutoStartKeyRef = useRef<string | null>(null)
 
   const [scraping, setScraping] = useState(false)
   const [scrapeResult, setScrapeResult] = useState<ScrapeResult | null>(null)
@@ -177,7 +208,6 @@ export default function Dashboard() {
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deletingBackup, setDeletingBackup] = useState(false)
   const tabParam = searchParams.get('tab')
-  const archiveRequestedParam = searchParams.get('archiveRequested')
 
   const fetchBackupsSummary = useCallback(async () => {
     try {
@@ -209,22 +239,6 @@ export default function Dashboard() {
       setReportedTotalStorageBytes(null)
     } finally {
       setLoadingBackups(false)
-    }
-  }, [])
-
-  const fetchArchiveWizardStatus = useCallback(async () => {
-    try {
-      const response = await fetch('/api/archive-wizard/status', { cache: 'no-store' })
-      const result = (await response.json()) as ArchiveWizardStatusResponse
-      if (!response.ok || !result.success) return
-
-      const resolvedStatus = result.status || null
-      setArchiveWizardStatus(resolvedStatus)
-      setArchiveRequestedAt(result.archiveRequestedAt || null)
-      setArchiveWizardSuggestedStep(result.suggestedStep || 1)
-      setArchiveWizardHasArchiveBackup(Boolean(result.hasArchiveBackup))
-    } catch (error) {
-      console.error('Error fetching archive wizard status:', error)
     }
   }, [])
 
@@ -267,70 +281,15 @@ export default function Dashboard() {
           ''
       )
 
-      await Promise.all([fetchBackupsSummary(), fetchArchiveWizardStatus()])
+      await fetchBackupsSummary()
       setAuthLoading(false)
     }
 
     init()
-  }, [fetchArchiveWizardStatus, fetchBackupsSummary, router, supabase])
+  }, [fetchBackupsSummary, router, supabase])
 
   const hasActiveJob = jobs.some((job) => job.status === 'queued' || job.status === 'processing')
   const activeJob = jobs.find((job) => job.status === 'queued' || job.status === 'processing') || null
-  const activeArchiveJob =
-    jobs.find((job) => job.job_type === 'archive_upload' && (job.status === 'queued' || job.status === 'processing')) || null
-  const showArchiveWizardCard = activeTab === 'twitter' && !archiveWizardHasArchiveBackup
-
-  const archiveWizardCard = useMemo(() => {
-    if (archiveWizardHasArchiveBackup) {
-      return null
-    }
-
-    if (activeArchiveJob) {
-      return {
-        eyebrow: 'Onboarding • Step 3 of 3',
-        title: 'Processing your archive backup',
-        description: activeArchiveJob.message || 'Your archive uploaded successfully and is now being processed in the background.',
-        ctaHref: '/dashboard/archive-wizard?step=3',
-        ctaLabel: 'View Processing',
-        stepHint: null as string | null,
-      }
-    }
-
-    if (archiveWizardSuggestedStep === 3 || archiveWizardStatus === 'ready') {
-      return {
-        eyebrow: 'Onboarding • Step 3 of 3',
-        title: 'Upload your Twitter archive ZIP',
-        description: 'Your archive is ready. Return to the wizard and upload the ZIP to finish setup.',
-        ctaHref: '/dashboard/archive-wizard?step=3',
-        ctaLabel: 'Upload Archive',
-        stepHint: null as string | null,
-      }
-    }
-
-    if (archiveWizardSuggestedStep === 2 || archiveWizardStatus === 'pending' || archiveWizardStatus === 'pending_extended') {
-      const waitingLabel =
-        archiveWizardStatus === 'pending_extended'
-          ? 'Twitter may still be preparing it. We will send another reminder shortly.'
-          : 'Twitter is preparing your archive. Continue to the wizard once your ZIP is ready.'
-      return {
-        eyebrow: 'Onboarding • Step 2 of 3',
-        title: 'Wait for your Twitter archive',
-        description: waitingLabel,
-        ctaHref: '/dashboard/archive-wizard?step=2',
-        ctaLabel: 'Continue Wizard',
-        stepHint: archiveRequestedAt ? `Requested: ${formatDate(archiveRequestedAt)}` : null,
-      }
-    }
-
-    return {
-      eyebrow: 'Onboarding',
-      title: 'Back up your Twitter data',
-      description: 'Start the archive wizard to request your Twitter archive now and upload it when it\'s ready.',
-      ctaHref: '/dashboard/archive-wizard?step=1',
-      ctaLabel: 'Start Archive Wizard',
-      stepHint: null as string | null,
-    }
-  }, [activeArchiveJob, archiveRequestedAt, archiveWizardHasArchiveBackup, archiveWizardStatus, archiveWizardSuggestedStep])
 
   useEffect(() => {
     if (!user || !hasActiveJob) return
@@ -343,18 +302,109 @@ export default function Dashboard() {
   }, [fetchBackupsSummary, hasActiveJob, user])
 
   useEffect(() => {
+    if (!encryptedArchiveTask) return
+
+    setEncryptedArchiveTask((prev) => {
+      if (!prev) return prev
+      if (prev.backupId) return prev
+
+      const knownBackupIds = new Set(prev.knownBackupIdsAtQueue)
+      const resolveBackupIdFromBackups = () => {
+        const fallback = allBackups.find((backup) => {
+          const backupId = String(backup.id || '')
+          if (!backupId || knownBackupIds.has(backupId)) return false
+          return inferBackupPlatform(backup) === 'twitter' && isArchiveBackup(backup)
+        })
+        return fallback ? String(fallback.id) : ''
+      }
+
+      const matchingJob = jobs.find((job) => job.id === prev.jobId)
+      if (!matchingJob) {
+        const fallbackBackupId = resolveBackupIdFromBackups()
+        if (!fallbackBackupId) return prev
+        return {
+          ...prev,
+          backupId: fallbackBackupId,
+          status: 'prompt',
+          progressPercent: Math.max(prev.progressPercent, 8),
+          detail: 'Backup completed. Starting encrypted ZIP storage in the background...',
+          error: null,
+        }
+      }
+
+      if (matchingJob.status === 'failed') {
+        return {
+          ...prev,
+          status: 'failed',
+          detail: 'Backup processing failed before encrypted archive storage could start.',
+          error: 'Please retry your archive import to store an encrypted original ZIP.',
+        }
+      }
+
+      const jobResultBackupId =
+        typeof matchingJob.result_backup_id === 'string' && matchingJob.result_backup_id.trim()
+          ? matchingJob.result_backup_id.trim()
+          : ''
+      const completed = matchingJob.status === 'completed'
+      const payload =
+        matchingJob.payload && typeof matchingJob.payload === 'object' && !Array.isArray(matchingJob.payload)
+          ? (matchingJob.payload as Record<string, unknown>)
+          : {}
+      const payloadCreatedBackupId =
+        completed && typeof payload.created_backup_id === 'string' && payload.created_backup_id.trim()
+          ? payload.created_backup_id.trim()
+          : ''
+      const payloadPartialBackupId =
+        completed && typeof payload.partial_backup_id === 'string' && payload.partial_backup_id.trim()
+          ? payload.partial_backup_id.trim()
+          : ''
+      const resolvedBackupId =
+        jobResultBackupId ||
+        payloadCreatedBackupId ||
+        payloadPartialBackupId ||
+        (completed ? resolveBackupIdFromBackups() : '')
+
+      if (!resolvedBackupId) {
+        if (
+          completed &&
+          prev.detail !== 'Finalizing backup reference for encrypted ZIP storage...'
+        ) {
+          return {
+            ...prev,
+            detail: 'Finalizing backup reference for encrypted ZIP storage...',
+          }
+        }
+        return prev
+      }
+
+      return {
+        ...prev,
+        backupId: resolvedBackupId,
+        status: 'prompt',
+        progressPercent: Math.max(prev.progressPercent, 8),
+        detail: 'Backup completed. Starting encrypted ZIP storage in the background...',
+        error: null,
+      }
+    })
+  }, [allBackups, encryptedArchiveTask, jobs])
+
+  useEffect(() => {
+    if (!encryptedArchiveTask) return
+    if (encryptedArchiveTask.status !== 'waiting_backup' || encryptedArchiveTask.backupId || hasActiveJob) return
+
+    const interval = setInterval(() => {
+      void fetchBackupsSummary()
+    }, 2000)
+
+    return () => clearInterval(interval)
+  }, [encryptedArchiveTask, fetchBackupsSummary, hasActiveJob])
+
+  useEffect(() => {
     if (!tabParam) return
     const validTabs: DashboardTab[] = ['twitter', 'instagram', 'tiktok', 'all-backups', 'account']
     if (!validTabs.includes(tabParam as DashboardTab)) return
     setActiveTab(tabParam as DashboardTab)
   }, [tabParam])
-
-  useEffect(() => {
-    if (archiveRequestedParam !== '1') return
-    setArchiveSetupMessage(
-      "Great! Twitter usually takes 24-48 hours to prepare your archive. We'll email you when it's time to download."
-    )
-  }, [archiveRequestedParam])
 
   useEffect(() => {
     const existing = new Set(allBackups.map((backup) => backup.id))
@@ -444,41 +494,410 @@ export default function Dashboard() {
     await fetchBackupsSummary()
   }
 
+  const discardStagedArchiveByPath = useCallback(async (stagedInputPath: string) => {
+    if (!stagedInputPath) return
+    await discardStagedTwitterArchive(stagedInputPath)
+  }, [])
+
   const handleFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
+    const previousStagedInputPath = stagedArchive?.stagedInputPath || ''
+
     setUploading(true)
+    setAnalyzingArchive(false)
+    setStartingArchiveImport(false)
     setUploadProgressPercent(0)
     setUploadProgressDetail('Preparing upload...')
     setUploadResult(null)
+    encryptedArchiveAutoStartKeyRef.current = null
+    setEncryptedArchiveTask(null)
+    setStagedArchive(null)
+
+    if (previousStagedInputPath) {
+      await discardStagedArchiveByPath(previousStagedInputPath)
+    }
+
+    let uploadedStagedInputPath = ''
 
     try {
-      const data = await uploadTwitterArchiveDirect({
+      const stagedUpload = await uploadTwitterArchiveToStaging({
         file,
-        username: twitterUsername || undefined,
         onProgress: (progress: DirectUploadProgress) => {
           setUploadProgressPercent(progress.percent)
           setUploadProgressDetail(progress.detail || null)
         },
       })
-      setUploadResult(data as UploadResult)
 
-      if (data.success) {
-        await Promise.all([
-          fetchBackupsSummary(),
-          fetchArchiveWizardStatus(),
-        ])
+      if (!stagedUpload.success || !stagedUpload.stagedInputPath) {
+        throw new Error(stagedUpload.error || 'Failed to upload archive')
       }
+
+      uploadedStagedInputPath = stagedUpload.stagedInputPath
+      setUploadProgressDetail('Scanning archive contents...')
+      setAnalyzingArchive(true)
+
+      const previewResponse = await fetch('/api/platforms/twitter/upload-archive/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stagedInputPath: stagedUpload.stagedInputPath,
+        }),
+      })
+      const previewPayload = (await previewResponse.json().catch(() => ({}))) as {
+        success?: boolean
+        error?: string
+        preview?: unknown
+      }
+
+      if (!previewResponse.ok || !previewPayload.success || !previewPayload.preview) {
+        throw new Error(previewPayload.error || 'Failed to inspect uploaded archive')
+      }
+
+      const preview = normalizeArchivePreviewData(previewPayload.preview)
+      if (!preview) {
+        throw new Error('Failed to read archive preview data')
+      }
+
+      setStagedArchive({
+        stagedInputPath: stagedUpload.stagedInputPath,
+        fileName: stagedUpload.fileName || file.name,
+        fileType: stagedUpload.fileType || file.type || 'application/zip',
+        fileSize: stagedUpload.fileSize || file.size,
+        file,
+        preview,
+        importSelection: deriveDefaultArchiveImportSelection(preview.available),
+        dmEncryptionEnabled: preview.available.direct_messages,
+        dmPassphrase: '',
+        dmPassphraseConfirm: '',
+        dmRecoveryKey: preview.available.direct_messages ? generateRecoveryKey() : '',
+        dmRecoveryKeySaved: false,
+        storeEncryptedArchive: false,
+      })
+
+      setUploadResult({
+        success: true,
+        message: 'Archive uploaded securely. Review what is included, then start import.',
+      })
     } catch (error) {
       console.error('Upload error:', error)
-      setUploadResult({ success: false, error: 'Failed to upload archive' })
+      setUploadResult({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to upload archive',
+      })
+      if (uploadedStagedInputPath) {
+        await discardStagedArchiveByPath(uploadedStagedInputPath)
+      }
+      setStagedArchive(null)
     } finally {
       setUploading(false)
+      setAnalyzingArchive(false)
       setUploadProgressPercent(0)
+      setUploadProgressDetail(null)
+      if (e.target) {
+        e.target.value = ''
+      }
+    }
+  }
+
+  const handleArchiveSelectionChange = useCallback(
+    (key: keyof ArchiveImportSelection, value: boolean) => {
+      setStagedArchive((prev) => {
+        if (!prev) return prev
+        if (!prev.preview.available[key] && value) return prev
+        const nextSelection = {
+          ...prev.importSelection,
+          [key]: value,
+        }
+        const directMessagesSelected = nextSelection.direct_messages
+        const nextDmEncryptionEnabled =
+          key === 'direct_messages'
+            ? directMessagesSelected
+            : prev.dmEncryptionEnabled
+        return {
+          ...prev,
+          importSelection: nextSelection,
+          dmEncryptionEnabled: nextDmEncryptionEnabled,
+          dmRecoveryKey: directMessagesSelected
+            ? prev.dmRecoveryKey || generateRecoveryKey()
+            : prev.dmRecoveryKey,
+          dmRecoveryKeySaved: directMessagesSelected ? prev.dmRecoveryKeySaved : false,
+          storeEncryptedArchive:
+            directMessagesSelected && nextDmEncryptionEnabled
+              ? prev.storeEncryptedArchive
+              : false,
+        }
+      })
+    },
+    [],
+  )
+
+  const handleDmEncryptionEnabledChange = useCallback((enabled: boolean) => {
+    setStagedArchive((prev) => {
+      if (!prev) return prev
+      if (!prev.importSelection.direct_messages) return prev
+      return {
+        ...prev,
+        dmEncryptionEnabled: enabled,
+        dmRecoveryKey: prev.dmRecoveryKey || generateRecoveryKey(),
+        dmRecoveryKeySaved: enabled ? prev.dmRecoveryKeySaved : false,
+        storeEncryptedArchive: enabled ? prev.storeEncryptedArchive : false,
+      }
+    })
+  }, [])
+
+  const handleStoreEncryptedArchiveChange = useCallback((value: boolean) => {
+    setStagedArchive((prev) => {
+      if (!prev) return prev
+      if (!prev.importSelection.direct_messages || !prev.dmEncryptionEnabled) {
+        return { ...prev, storeEncryptedArchive: false }
+      }
+      return { ...prev, storeEncryptedArchive: value }
+    })
+  }, [])
+
+  const handleDmPassphraseChange = useCallback((value: string) => {
+    setStagedArchive((prev) => (prev ? { ...prev, dmPassphrase: value } : prev))
+  }, [])
+
+  const handleDmPassphraseConfirmChange = useCallback((value: string) => {
+    setStagedArchive((prev) => (prev ? { ...prev, dmPassphraseConfirm: value } : prev))
+  }, [])
+
+  const handleDmRecoverySavedChange = useCallback((value: boolean) => {
+    setStagedArchive((prev) => (prev ? { ...prev, dmRecoveryKeySaved: value } : prev))
+  }, [])
+
+  const handleDiscardStagedArchive = useCallback(async () => {
+    if (!stagedArchive) return
+    await discardStagedArchiveByPath(stagedArchive.stagedInputPath)
+    setStagedArchive(null)
+    setUploadResult(null)
+  }, [discardStagedArchiveByPath, stagedArchive])
+
+  const handleStartArchiveImport = async () => {
+    if (!stagedArchive) return
+    if (!hasSelectedArchiveImportCategory(stagedArchive.importSelection)) {
+      setUploadResult({ success: false, error: 'Select at least one archive category to import.' })
+      return
+    }
+
+    const initialImportSelection = { ...stagedArchive.importSelection }
+    const importSelection = { ...initialImportSelection }
+    let dmEncryption: DmEncryptionUploadMetadata | null = null
+    let encryptedDmStagedInputPath = ''
+
+    if (initialImportSelection.direct_messages) {
+      if (!stagedArchive.dmEncryptionEnabled) {
+        setUploadResult({
+          success: false,
+          error: 'DM encryption is required when importing chats. Enable encryption or use Skip DMs.',
+        })
+        return
+      }
+
+      if (stagedArchive.dmPassphrase.trim().length < 8) {
+        setUploadResult({
+          success: false,
+          error: 'Passphrase must be at least 8 characters.',
+        })
+        return
+      }
+
+      if (stagedArchive.dmPassphrase !== stagedArchive.dmPassphraseConfirm) {
+        setUploadResult({
+          success: false,
+          error: 'Passphrase confirmation does not match.',
+        })
+        return
+      }
+
+      if (!stagedArchive.dmRecoveryKeySaved) {
+        setUploadResult({
+          success: false,
+          error: 'Confirm that you saved your recovery key before continuing.',
+        })
+        return
+      }
+    }
+
+    setStartingArchiveImport(true)
+    setUploadResult(null)
+
+    try {
+      if (initialImportSelection.direct_messages) {
+        setUploadProgressDetail('Decrypting and encrypting chats in your browser...')
+
+        const extractionResult = await extractDirectMessagesFromArchiveFile(stagedArchive.file)
+        const encryptedDmPayload = await encryptDirectMessagesForClientStorage({
+          directMessages: extractionResult.directMessages,
+          passphrase: stagedArchive.dmPassphrase,
+          recoveryKey: stagedArchive.dmRecoveryKey,
+        })
+
+        setUploadProgressDetail('Uploading encrypted chat payload...')
+        const encryptedDmUpload = await uploadEncryptedDmPayloadToStaging({
+          payload: encryptedDmPayload,
+          fileName: `${stagedArchive.fileName.replace(/\\.zip$/i, '') || 'archive'}-encrypted-dms.json`,
+        })
+
+        if (!encryptedDmUpload.success) {
+          throw new Error(encryptedDmUpload.error)
+        }
+
+        encryptedDmStagedInputPath = encryptedDmUpload.stagedInputPath
+        dmEncryption = {
+          encrypted_input_path: encryptedDmUpload.stagedInputPath,
+          conversation_count: encryptedDmPayload.metadata.conversation_count,
+          message_count: encryptedDmPayload.metadata.message_count,
+          version: encryptedDmPayload.version,
+        }
+      }
+
+      const result = await startTwitterArchiveImport({
+        stagedInputPath: stagedArchive.stagedInputPath,
+        fileName: stagedArchive.fileName,
+        fileType: stagedArchive.fileType,
+        fileSize: stagedArchive.fileSize,
+        username: twitterUsername || undefined,
+        importSelection,
+        dmEncryption,
+        preserveArchiveFile: true,
+      })
+
+      if (!result.success && encryptedDmStagedInputPath) {
+        await discardStagedArchiveByPath(encryptedDmStagedInputPath)
+      }
+
+      setUploadResult(result)
+      if (result.success) {
+        if (initialImportSelection.direct_messages && dmEncryption && stagedArchive.storeEncryptedArchive && result.job?.id) {
+          encryptedArchiveAutoStartKeyRef.current = null
+          setEncryptedArchiveTask({
+            jobId: result.job.id,
+            backupId: null,
+            knownBackupIdsAtQueue: allBackups.map((backup) => String(backup.id || '')),
+            file: stagedArchive.file,
+            passphrase: stagedArchive.dmPassphrase,
+            recoveryKey: stagedArchive.dmRecoveryKey,
+            status: 'waiting_backup',
+            progressPercent: 0,
+            detail: 'Import started. Waiting for backup completion before encrypted ZIP storage.',
+            error: null,
+          })
+        } else {
+          setEncryptedArchiveTask(null)
+        }
+        setStagedArchive(null)
+        await fetchBackupsSummary()
+      }
+    } catch (error) {
+      console.error('Start import error:', error)
+      if (encryptedDmStagedInputPath) {
+        await discardStagedArchiveByPath(encryptedDmStagedInputPath)
+      }
+      setUploadResult({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to start archive import',
+      })
+    } finally {
+      setStartingArchiveImport(false)
       setUploadProgressDetail(null)
     }
   }
+
+  const handleStartEncryptedArchiveStorage = useCallback(async () => {
+    const task = encryptedArchiveTask
+    if (!task || !task.backupId) return
+
+    setEncryptedArchiveTask((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: 'running',
+            progressPercent: 1,
+            detail: 'Preparing encrypted archive storage...',
+            error: null,
+          }
+        : prev,
+    )
+
+    try {
+      const result = await encryptAndUploadArchiveInChunks({
+        backupId: task.backupId,
+        file: task.file,
+        passphrase: task.passphrase,
+        recoveryKey: task.recoveryKey,
+        onProgress: (progress) => {
+          setEncryptedArchiveTask((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  status: 'running',
+                  progressPercent: progress.percent,
+                  detail: progress.detail,
+                  error: null,
+                }
+              : prev,
+          )
+        },
+      })
+
+      if (!result.success) {
+        console.error('[Encrypted Archive] Background storage failed:', result.error)
+        setEncryptedArchiveTask((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: 'failed',
+                detail: 'Encrypted archive storage failed.',
+                error: 'Could not store your encrypted archive right now. Please try again.',
+              }
+            : prev,
+        )
+        return
+      }
+
+      setEncryptedArchiveTask((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'completed',
+              progressPercent: 100,
+              detail: 'Encrypted archive stored successfully.',
+              error: null,
+            }
+          : prev,
+      )
+      await fetchBackupsSummary()
+    } catch (error) {
+      console.error('[Encrypted Archive] Unexpected storage error:', error)
+      setEncryptedArchiveTask((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'failed',
+              detail: 'Encrypted archive storage failed.',
+              error: 'Could not store your encrypted archive right now. Please try again.',
+            }
+          : prev,
+      )
+    }
+  }, [encryptedArchiveTask, fetchBackupsSummary])
+
+  useEffect(() => {
+    if (!encryptedArchiveTask || encryptedArchiveTask.status !== 'prompt' || !encryptedArchiveTask.backupId) return
+    const autoStartKey = `${encryptedArchiveTask.jobId}:${encryptedArchiveTask.backupId}`
+    if (encryptedArchiveAutoStartKeyRef.current === autoStartKey) return
+    encryptedArchiveAutoStartKeyRef.current = autoStartKey
+    void handleStartEncryptedArchiveStorage()
+  }, [encryptedArchiveTask, handleStartEncryptedArchiveStorage])
+
+  const handleDismissEncryptedArchiveStorage = useCallback(() => {
+    encryptedArchiveAutoStartKeyRef.current = null
+    setEncryptedArchiveTask(null)
+  }, [])
 
   const handleScrapeNow = async (targets: TwitterScrapeTargets) => {
     if (!twitterUsername.trim()) return
@@ -681,46 +1100,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {archiveSetupMessage && (
-            <section className="mb-6 rounded-2xl border border-emerald-300/35 bg-emerald-500/15 p-4 text-sm text-emerald-100">
-              <div className="flex items-start justify-between gap-3">
-                <p>{archiveSetupMessage}</p>
-                <button
-                  type="button"
-                  onClick={() => setArchiveSetupMessage(null)}
-                  className="rounded-full border border-emerald-200/30 px-2.5 py-1 text-xs font-semibold text-emerald-100/90 hover:bg-emerald-500/20"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </section>
-          )}
-
-          {showArchiveWizardCard && archiveWizardCard && (
-            <section className="mb-6 rounded-3xl border border-blue-300/35 bg-blue-500/12 p-6 shadow-[0_12px_30px_rgba(3,25,63,0.3)]">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-100/75">{archiveWizardCard.eyebrow}</p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">{archiveWizardCard.title}</h3>
-              <p className="mt-2 text-sm text-blue-100/80">{archiveWizardCard.description}</p>
-              {archiveWizardCard.stepHint && (
-                <p className="mt-2 text-xs text-blue-100/70">{archiveWizardCard.stepHint}</p>
-              )}
-              {activeArchiveJob && (
-                <div className="mt-4 h-2 w-full max-w-xl rounded-full bg-white/15">
-                  <div
-                    className="h-2 rounded-full bg-gradient-to-r from-blue-300 to-cyan-300 transition-all"
-                    style={{ width: `${Math.max(0, Math.min(100, Number(activeArchiveJob.progress) || 0))}%` }}
-                  />
-                </div>
-              )}
-              <a
-                href={archiveWizardCard.ctaHref}
-                className="mt-4 inline-flex w-full items-center justify-center rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black hover:bg-gray-200 sm:w-auto"
-              >
-                {archiveWizardCard.ctaLabel}
-              </a>
-            </section>
-          )}
-
           {activeTab === 'twitter' && (
             <TwitterPanel
               backupsCount={backupsCount}
@@ -729,9 +1108,22 @@ export default function Dashboard() {
               jobs={jobs}
               activeJob={activeJob}
               uploading={uploading}
+              analyzingArchive={analyzingArchive}
+              startingArchiveImport={startingArchiveImport}
               uploadProgressPercent={uploadProgressPercent}
               uploadProgressDetail={uploadProgressDetail}
               uploadResult={uploadResult}
+              stagedArchive={stagedArchive}
+              encryptedArchiveTask={
+                encryptedArchiveTask
+                  ? {
+                      status: encryptedArchiveTask.status,
+                      progressPercent: encryptedArchiveTask.progressPercent,
+                      detail: encryptedArchiveTask.detail,
+                      error: encryptedArchiveTask.error,
+                    }
+                  : null
+              }
               scraping={scraping}
               scrapeResult={scrapeResult}
               twitterUsername={twitterUsername}
@@ -745,6 +1137,16 @@ export default function Dashboard() {
               onDownloadBackup={handleDownloadBackup}
               onDeleteBackup={handleDeleteBackup}
               onUploadChange={handleFileUpload}
+              onArchiveSelectionChange={handleArchiveSelectionChange}
+              onDmEncryptionEnabledChange={handleDmEncryptionEnabledChange}
+              onDmPassphraseChange={handleDmPassphraseChange}
+              onDmPassphraseConfirmChange={handleDmPassphraseConfirmChange}
+              onDmRecoverySavedChange={handleDmRecoverySavedChange}
+              onStoreEncryptedArchiveChange={handleStoreEncryptedArchiveChange}
+              onArchiveImportStart={handleStartArchiveImport}
+              onArchiveDiscard={handleDiscardStagedArchive}
+              onEncryptedArchiveStoreStart={handleStartEncryptedArchiveStorage}
+              onEncryptedArchiveDismiss={handleDismissEncryptedArchiveStorage}
               onScrapeNow={handleScrapeNow}
             />
           )}
@@ -954,6 +1356,8 @@ export default function Dashboard() {
                   filteredAllBackups.map((backup) => {
                     const partial = getBackupPartialDetails(backup)
                     const isArchive = isArchiveBackup(backup)
+                    const hasEncryptedArchive = Boolean(backup.data?.encrypted_archive)
+                    const canDownloadArchive = isArchive && !hasEncryptedArchive
                     const methodLabel = backup.backup_name || formatBackupMethodLabel(backup)
                     const platformId = inferBackupPlatform(backup)
                     const partialTitle = partial.reasons.length > 0
@@ -1023,7 +1427,7 @@ export default function Dashboard() {
                             onClick={() => {
                               void handleDownloadBackup(backup.id)
                             }}
-                            disabled={!isArchive}
+                            disabled={!canDownloadArchive}
                             className="flex-1 rounded-full border border-white/20 px-4 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
                           >
                             Download

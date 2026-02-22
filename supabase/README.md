@@ -26,18 +26,6 @@ Before applying the migration, you can check what constraints/indexes currently 
 
 ## Migrations
 
-### 008_add_archive_wizard_profile_fields.sql
-
-Adds archive wizard tracking fields to `profiles`:
-- `archive_request_status`
-- `archive_requested_at`
-- `archive_reminder_count`
-- `archive_last_reminder_at`
-
-Apply this migration before using `/dashboard/archive-wizard` and reminder endpoints.
-
----
-
 ### 007_normalize_backups_media_schema.sql
 
 **Issue**: Different environments may have schema drift where:

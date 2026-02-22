@@ -13,15 +13,31 @@ export default function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
+  const [showResendConfirmation, setShowResendConfirmation] = useState(false)
+  const [resendingConfirmation, setResendingConfirmation] = useState(false)
   const [loading, setLoading] = useState(false)
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
+
+  const notifyNewSignup = async (params: { userId: string; email: string; fullName?: string }) => {
+    try {
+      await fetch('/api/notifications/new-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+        keepalive: true,
+      })
+    } catch {
+      // Keep signup UX clean even if notification delivery fails.
+    }
+  }
 
   const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setLoading(true)
     setError(null)
     setInfo(null)
+    setShowResendConfirmation(false)
 
     if (!fullName.trim()) {
       setError('Name is required')
@@ -54,18 +70,54 @@ export default function SignupPage() {
 
     if (signUpError) {
       setError(signUpError.message)
+      if (signUpError.message.toLowerCase().includes('email not confirmed')) {
+        setShowResendConfirmation(true)
+      }
       setLoading(false)
       return
     }
 
+    if (data.user?.id && data.user.email) {
+      void notifyNewSignup({
+        userId: data.user.id,
+        email: data.user.email,
+        fullName: fullName.trim(),
+      })
+    }
+
     if (!data.session) {
       setInfo('Account created. Email confirmation is required before login.')
+      setShowResendConfirmation(true)
       setLoading(false)
       return
     }
 
     router.push('/dashboard')
     router.refresh()
+  }
+
+  const handleResendConfirmation = async () => {
+    setError(null)
+    setInfo(null)
+
+    if (!email.trim()) {
+      setError('Enter your email first, then resend confirmation.')
+      return
+    }
+
+    setResendingConfirmation(true)
+    const { error: resendError } = await supabase.auth.resend({
+      type: 'signup',
+      email: email.trim(),
+    })
+    setResendingConfirmation(false)
+
+    if (resendError) {
+      setError(resendError.message)
+      return
+    }
+
+    setInfo('Confirmation email sent. Check inbox/spam.')
   }
 
   const handleGoogleSignup = async () => {
@@ -154,6 +206,16 @@ export default function SignupPage() {
 
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           {info && <p className="text-sm text-green-700 dark:text-green-400">{info}</p>}
+          {showResendConfirmation && (
+            <button
+              type="button"
+              onClick={handleResendConfirmation}
+              disabled={resendingConfirmation}
+              className="w-full text-sm text-blue-600 hover:underline disabled:cursor-not-allowed disabled:opacity-60 dark:text-blue-400"
+            >
+              {resendingConfirmation ? 'Sending confirmation...' : 'Resend confirmation email'}
+            </button>
+          )}
 
           <p className="text-sm text-center text-gray-600 dark:text-gray-300">
             Already have an account?{' '}

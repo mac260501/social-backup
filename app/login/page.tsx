@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SocialLogoRow } from '@/components/social-logos'
 
@@ -20,6 +20,18 @@ export default function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const supabase = useMemo(() => createClient(), [])
+  const notifyNewSignup = useCallback(async (params: { userId: string; email: string; fullName?: string }) => {
+    try {
+      await fetch('/api/notifications/new-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+        keepalive: true,
+      })
+    } catch {
+      // Keep auth UX clean even if notification delivery fails.
+    }
+  }, [])
 
   useEffect(() => {
     const handleAuthState = async () => {
@@ -59,12 +71,32 @@ export default function LoginPage() {
         return
       }
 
+      const {
+        data: { user: exchangedUser },
+      } = await supabase.auth.getUser()
+      if (exchangedUser?.id && exchangedUser.email) {
+        const metadata =
+          exchangedUser.user_metadata && typeof exchangedUser.user_metadata === 'object' && !Array.isArray(exchangedUser.user_metadata)
+            ? (exchangedUser.user_metadata as Record<string, unknown>)
+            : {}
+        const fullName =
+          (typeof metadata.full_name === 'string' && metadata.full_name.trim()) ||
+          (typeof metadata.name === 'string' && metadata.name.trim()) ||
+          (typeof metadata.display_name === 'string' && metadata.display_name.trim()) ||
+          undefined
+        void notifyNewSignup({
+          userId: exchangedUser.id,
+          email: exchangedUser.email,
+          fullName,
+        })
+      }
+
       router.replace(nextPath)
       router.refresh()
     }
 
     handleAuthState()
-  }, [router, searchParams, supabase])
+  }, [notifyNewSignup, router, searchParams, supabase])
 
   const handleEmailLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
