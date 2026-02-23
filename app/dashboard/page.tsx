@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { User } from '@supabase/supabase-js'
-import { ExternalLink, FileArchive, FolderArchive, Globe, LogOut, UserRound } from 'lucide-react'
+import { CircleHelp, ExternalLink, FileArchive, FolderArchive, Globe, LogOut, ShieldCheck, UserRound } from 'lucide-react'
 import { InstagramLogo, TikTokLogo, XLogo } from '@/components/social-logos'
 import { createClient } from '@/lib/supabase/client'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
@@ -70,6 +70,11 @@ type PendingDeleteState = {
   backupIds: string[]
   label: string
 }
+type DashboardGuide = {
+  title: string
+  description: string
+  steps: string[]
+}
 
 type StagedArchiveState = {
   stagedInputPath: string
@@ -105,6 +110,49 @@ const DEFAULT_TWITTER_SCRAPE_TARGETS: TwitterScrapeTargets = {
   replies: true,
   followers: true,
   following: true,
+}
+const DASHBOARD_GUIDES: Record<DashboardTab, DashboardGuide> = {
+  twitter: {
+    title: 'Pick your backup route',
+    description: 'Use archive upload for complete history, or snapshot for a faster current-state backup.',
+    steps: [
+      'Choose Archive Upload for full history or Snapshot for current public data.',
+      'Select what to include and review encryption options before starting.',
+      'Track progress, then open the result in All Backups.',
+    ],
+  },
+  instagram: {
+    title: 'Instagram backup is coming soon',
+    description: 'This tab is reserved for the Instagram flow. The current working backup flow is in the X tab.',
+    steps: [
+      'Use the X tab today if you want to test the full backup experience.',
+      'Check All Backups to see how completed backups are organized.',
+      'Return here when Instagram support ships in a future release.',
+    ],
+  },
+  tiktok: {
+    title: 'TikTok backup is coming soon',
+    description: 'This area is prepared for TikTok support. You can currently test the live workflow with X backups.',
+    steps: [
+      'Use the X tab to run an archive import or snapshot now.',
+      'Review completed results in All Backups to understand output format.',
+      'Use this tab once TikTok support is released.',
+    ],
+  },
+  'all-backups': {
+    title: 'Manage and verify your backup library',
+    description: 'Filter and sort backups here, then open any backup to inspect content and metadata.',
+    steps: [
+      'Use filters to narrow by platform, backup type, and sort order.',
+      'Open backups to review posts, media, profile data, and timestamps.',
+      'Download archive backups or delete old backups when no longer needed.',
+    ],
+  },
+  account: {
+    title: 'Account details',
+    description: 'Review your identity and sign-out controls in this section.',
+    steps: ['Review profile details.', 'Confirm account email.', 'Use Sign Out when done.'],
+  },
 }
 
 function parseSizeValue(value: unknown) {
@@ -979,6 +1027,12 @@ export default function Dashboard() {
   const filteredBackupIdSet = new Set(filteredAllBackups.map((backup) => backup.id))
   const selectedVisibleCount = selectedBackupIds.filter((id) => filteredBackupIdSet.has(id)).length
   const allVisibleSelected = filteredAllBackups.length > 0 && selectedVisibleCount === filteredAllBackups.length
+  const activeGuide = DASHBOARD_GUIDES[activeTab]
+  const isFirstBackupRun = allBackups.length === 0 && inProgressJobs.length === 0
+  const activeGuideDescription =
+    activeTab === 'twitter' && isFirstBackupRun
+      ? 'Start with either Archive Upload or Snapshot below. If you want a quick test run first, choose Snapshot.'
+      : activeGuide.description
 
   const toggleBackupSelection = (backupId: string) => {
     setSelectedBackupIds((prev) => {
@@ -1099,6 +1153,68 @@ export default function Dashboard() {
               <p>Free Plan</p>
             </div>
           </div>
+
+          {activeTab !== 'account' && (
+            <section className="mb-7 rounded-3xl border border-white/15 bg-[#0f1937]/92 p-5 shadow-[0_14px_40px_rgba(4,10,28,0.35)] sm:p-6">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="max-w-3xl">
+                  <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-blue-200/80">
+                    <CircleHelp size={14} />
+                    Quick Guide
+                  </p>
+                  <h3 className="mt-2 text-xl font-semibold text-white sm:text-2xl">{activeGuide.title}</h3>
+                  <p className="mt-1 text-sm text-blue-100/80">{activeGuideDescription}</p>
+                </div>
+                {activeTab === 'twitter' && (
+                  <div className="rounded-2xl border border-cyan-300/35 bg-cyan-500/10 px-4 py-3">
+                    <p className="text-sm font-semibold text-cyan-100">Two backup options</p>
+                    <p className="mt-1 text-xs text-cyan-100/90">
+                      Archive = full history from your ZIP. Snapshot = current public profile state.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                {activeGuide.steps.map((step, index) => (
+                  <article key={step} className="rounded-2xl border border-white/10 bg-[#0a1430] px-3.5 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-200/70">
+                      Step {index + 1}
+                    </p>
+                    <p className="mt-1 text-sm text-blue-100">{step}</p>
+                  </article>
+                ))}
+              </div>
+
+              <details className="group mt-4 rounded-2xl border border-white/10 bg-[#0a1430] p-4">
+                <summary className="cursor-pointer list-none text-sm font-semibold text-white">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="transition group-open:rotate-90">›</span>
+                    What backup types mean
+                  </span>
+                </summary>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <article className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <p className="text-sm font-semibold text-white">Archive backup</p>
+                    <p className="mt-1 text-xs leading-relaxed text-blue-100/80">
+                      Best for long-term history. Imported from your X archive ZIP and can include tweets, likes,
+                      follows, media, and encrypted DMs.
+                    </p>
+                  </article>
+                  <article className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <p className="text-sm font-semibold text-white">Snapshot backup</p>
+                    <p className="mt-1 text-xs leading-relaxed text-blue-100/80">
+                      Best for quick check-ins. Captures current public data for the targets you select at run time.
+                    </p>
+                  </article>
+                </div>
+                <p className="mt-3 inline-flex items-center gap-2 text-xs text-blue-100/85">
+                  <ShieldCheck size={14} />
+                  DM passphrases and recovery keys stay in your browser.
+                </p>
+              </details>
+            </section>
+          )}
 
           {activeTab === 'twitter' && (
             <TwitterPanel
