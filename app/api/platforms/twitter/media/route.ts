@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient as createServerClient } from '@/lib/supabase/server'
+import { getRequestActorId } from '@/lib/request-actor'
+import { getShareGrantFromCookies } from '@/lib/share-links'
 import { createSignedGetUrl, normalizeStoragePath } from '@/lib/storage/r2'
 
 const supabase = createAdminClient()
@@ -13,13 +14,9 @@ function asPath(value: string | null): string | null {
 
 export async function GET(request: Request) {
   try {
-    const authClient = await createServerClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await authClient.auth.getUser()
-
-    if (authError || !user) {
+    const actorId = await getRequestActorId()
+    const shareGrant = await getShareGrantFromCookies()
+    if (!actorId && !shareGrant) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -33,15 +30,15 @@ export async function GET(request: Request) {
 
     let allowed = false
 
-    if (storagePath.startsWith(`${user.id}/`)) {
+    if (actorId && storagePath.startsWith(`${actorId}/`)) {
       allowed = true
     }
 
-    if (!allowed) {
+    if (!allowed && actorId) {
       const { data: mediaFile, error: mediaError } = await supabase
         .from('media_files')
         .select('id')
-        .eq('user_id', user.id)
+        .eq('user_id', actorId)
         .eq('file_path', storagePath)
         .maybeSingle()
 
@@ -50,15 +47,39 @@ export async function GET(request: Request) {
       }
     }
 
-    if (!allowed) {
+    if (!allowed && actorId) {
       const { data: backup } = await supabase
         .from('backups')
         .select('id')
-        .eq('user_id', user.id)
+        .eq('user_id', actorId)
         .eq('archive_file_path', storagePath)
         .maybeSingle()
 
       if (backup) {
+        allowed = true
+      }
+    }
+
+    if (!allowed && shareGrant) {
+      const { data: sharedMedia } = await supabase
+        .from('media_files')
+        .select('id')
+        .eq('backup_id', shareGrant.backupId)
+        .eq('file_path', storagePath)
+        .maybeSingle()
+      if (sharedMedia) {
+        allowed = true
+      }
+    }
+
+    if (!allowed && shareGrant) {
+      const { data: sharedArchive } = await supabase
+        .from('backups')
+        .select('id')
+        .eq('id', shareGrant.backupId)
+        .eq('archive_file_path', storagePath)
+        .maybeSingle()
+      if (sharedArchive) {
         allowed = true
       }
     }

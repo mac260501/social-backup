@@ -17,8 +17,11 @@
 - Total uncompressed media bytes limit (`TWITTER_MAX_ARCHIVE_MEDIA_BYTES`, default `5GB`)
 - User total storage limit (`USER_MAX_TOTAL_STORAGE_BYTES`, default `5GB`)
 - Scrape tweet request default (`TWITTER_SCRAPE_DEFAULT_TWEETS`, used only by legacy callers)
+- Free scrape caps (`TWITTER_SCRAPE_FREE_MAX_TWEETS_AND_REPLIES`, `TWITTER_SCRAPE_FREE_MAX_FOLLOWERS_AND_FOLLOWING`)
+- Scraped media worker concurrency (`TWITTER_SCRAPE_MEDIA_WORKERS`, default `6`, range `1-16`)
 - Scrape snapshot token budget caps (`TWITTER_SCRAPE_API_MAX_COST_PER_RUN_USD` / `TWITTER_SCRAPE_API_MAX_COST_PER_MONTH_USD`, default `$25 / $20`)
-- Apify pricing knobs (`TWITTER_APIFY_PROFILE_QUERY_BASE_USD`, `TWITTER_APIFY_PROFILE_INCLUDED_ITEMS`, `TWITTER_APIFY_PROFILE_EXTRA_ITEM_USD`, `TWITTER_APIFY_USER_ITEM_USD`)
+- Apify pricing knobs (`TWITTER_APIFY_PROFILE_QUERY_BASE_USD`, `TWITTER_APIFY_PROFILE_INCLUDED_ITEMS`, `TWITTER_APIFY_PROFILE_EXTRA_ITEM_USD`, `TWITTER_APIFY_SOCIAL_GRAPH_ITEM_USD`, legacy alias `TWITTER_APIFY_USER_ITEM_USD`)
+- Optional social-graph actor override (`TWITTER_APIFY_SOCIAL_GRAPH_ACTOR_ID`, default `kaitoeasyapi/premium-x-follower-scraper-following-data`)
 - Apify ad-hoc webhook auth (`APIFY_WEBHOOK_SECRET`) and optional app base URL override (`APP_BASE_URL`)
 
 ## Reserved folders

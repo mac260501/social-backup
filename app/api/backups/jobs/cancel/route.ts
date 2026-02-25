@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import { ApifyClient } from 'apify-client'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient as createServerClient } from '@/lib/supabase/server'
 import { deleteBackupAndStorageById, type BackupDeleteResult } from '@/lib/backups/delete-backup-data'
 import { deleteObjectsFromR2 } from '@/lib/storage/r2'
+import { getRequestActorId } from '@/lib/request-actor'
 import {
   getBackupJobForUser,
   markBackupJobCleanup,
@@ -71,24 +71,37 @@ async function abortApifyRuns(runIds: string[]): Promise<ApifyAbortResult[]> {
 
 export async function POST(request: Request) {
   try {
-    const authClient = await createServerClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await authClient.auth.getUser()
-
-    if (authError || !user) {
+    const actorId = await getRequestActorId()
+    if (!actorId) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
-    const body = await request.json().catch(() => ({}))
-    const jobId = asString((body as Record<string, unknown>).jobId)
+    let body: Record<string, unknown> = {}
+    const contentType = request.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    } else if (contentType.includes('application/x-www-form-urlencoded')) {
+      const form = await request.formData().catch(() => null)
+      if (form) {
+        body.jobId = asString(form.get('jobId')) || undefined
+      }
+    } else {
+      const rawText = await request.text().catch(() => '')
+      if (rawText) {
+        try {
+          body = JSON.parse(rawText) as Record<string, unknown>
+        } catch {
+          body = {}
+        }
+      }
+    }
+    const jobId = asString(body.jobId)
 
     if (!jobId) {
       return NextResponse.json({ success: false, error: 'jobId is required.' }, { status: 400 })
     }
 
-    const job = await getBackupJobForUser(supabase, jobId, user.id)
+    const job = await getBackupJobForUser(supabase, jobId, actorId)
     if (!job) {
       return NextResponse.json({ success: false, error: 'Job not found.' }, { status: 404 })
     }
@@ -103,7 +116,7 @@ export async function POST(request: Request) {
 
     await requestBackupJobCancellation(supabase, jobId)
 
-    const latestJob = await getBackupJobForUser(supabase, jobId, user.id)
+    const latestJob = await getBackupJobForUser(supabase, jobId, actorId)
     const payload = toRecord(latestJob?.payload || job.payload)
     const apifyRunIds = parseApifyRunIds(payload)
     const apifyAbortResults = await abortApifyRuns(apifyRunIds)
@@ -125,7 +138,7 @@ export async function POST(request: Request) {
       try {
         backupCleanupResult = await deleteBackupAndStorageById(supabase, {
           backupId: candidateBackupId,
-          expectedUserId: user.id,
+          expectedUserId: actorId,
         })
       } catch (cleanupError) {
         console.error('[Cancel Job] Backup cleanup error:', cleanupError)

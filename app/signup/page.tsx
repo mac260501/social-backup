@@ -32,6 +32,17 @@ export default function SignupPage() {
     }
   }
 
+  const claimAnonymousBackups = async () => {
+    try {
+      await fetch('/api/backups/claim', {
+        method: 'POST',
+        keepalive: true,
+      })
+    } catch {
+      // Do not block account creation flow if claim fails.
+    }
+  }
+
   const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setLoading(true)
@@ -92,6 +103,7 @@ export default function SignupPage() {
       return
     }
 
+    await claimAnonymousBackups()
     router.push('/dashboard')
     router.refresh()
   }

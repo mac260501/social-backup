@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { verifyMediaOwnership } from '@/lib/auth-helpers'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient as createServerClient } from '@/lib/supabase/server'
+import { getRequestActorId } from '@/lib/request-actor'
+import { getShareGrantFromCookies } from '@/lib/share-links'
 import { buildInternalMediaUrl } from '@/lib/storage/media-url'
 import { listObjectPaths, parseLegacyStoragePath } from '@/lib/storage/r2'
 
@@ -44,13 +45,9 @@ async function resolveCandidateToUrl(candidate: string | null): Promise<string |
 
 export async function GET(request: Request) {
   try {
-    const authClient = await createServerClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await authClient.auth.getUser()
-
-    if (authError || !user) {
+    const actorId = await getRequestActorId()
+    const shareGrant = await getShareGrantFromCookies()
+    if (!actorId && !shareGrant) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
     }
 
@@ -61,8 +58,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: 'Backup ID is required' }, { status: 400 })
     }
 
-    const isOwner = await verifyMediaOwnership(backupId, user.id)
-    if (!isOwner) {
+    const isOwner = actorId ? await verifyMediaOwnership(backupId, actorId) : false
+    const hasShareAccess = Boolean(shareGrant && shareGrant.backupId === backupId)
+    if (!isOwner && !hasShareAccess) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
     }
 
@@ -173,7 +171,7 @@ export async function GET(request: Request) {
       isProfileIncludedInSnapshot !== false && (!avatarFilePath || !headerFilePath) && (candidateFiles.length > 0 || hasExplicitProfileReference)
 
     if (shouldUseStorageFolderFallback) {
-      const backupOwnerId = typeof backup.user_id === 'string' ? backup.user_id : user.id
+      const backupOwnerId = typeof backup.user_id === 'string' ? backup.user_id : actorId || ''
       const mediaFolders = [`${backupOwnerId}/profile_media`, `${backupOwnerId}/profiles_media`]
 
       const listedFiles = (

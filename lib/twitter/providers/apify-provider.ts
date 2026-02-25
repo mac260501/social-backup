@@ -21,6 +21,7 @@ type ProfileMetadata = {
   profileImageUrl?: string
   coverImageUrl?: string
   displayName?: string
+  bio?: string
   followersCount?: number
   followingCount?: number
   statusesCount?: number
@@ -75,6 +76,8 @@ const APIFY_TERMINAL_WEBHOOK_EVENTS = [
   'ACTOR.RUN.TIMED_OUT',
   'ACTOR.RUN.ABORTED',
 ] as const
+const KAITO_RELATION_MIN_ITEMS = 200
+const KAITO_RELATION_DEFAULT_ITEMS = 100_000
 
 type TimelineProgress = {
   tweets: number
@@ -95,13 +98,15 @@ type SocialGraphProgress = {
  * Uses:
  * - apidojo/tweet-scraper (profile timeline + with_replies timeline)
  * - apidojo/twitter-scraper-lite (targeted pinned tweet recovery by status URL)
- * - apidojo/twitter-user-scraper (followers, following)
+ * - kaitoeasyapi/premium-x-follower-scraper-following-data (followers, following)
  */
 export class ApifyProvider implements TwitterProvider {
   private apiKey: string
   private profileActorId = 'apidojo/tweet-scraper'
   private pinnedTweetActorId = 'apidojo/twitter-scraper-lite'
-  private userActorId = 'apidojo/twitter-user-scraper'
+  private userActorId =
+    process.env.TWITTER_APIFY_SOCIAL_GRAPH_ACTOR_ID
+    || 'kaitoeasyapi/premium-x-follower-scraper-following-data'
   private client: ApifyClient
 
   constructor() {
@@ -170,66 +175,113 @@ export class ApifyProvider implements TwitterProvider {
     let following: Following[] = []
     let profile: ProfileMetadata = {}
     let timelineItemCount = 0
+    let socialGraphItemCount = 0
 
     const emitProgress = async (update: TwitterScrapeProgressUpdate) => {
       if (!onProgress) return
       await onProgress(update)
     }
 
-    if (targets.profile || targets.tweets || targets.replies) {
-      const timeline = await this.scrapeTimeline(username, maxTweets, async (progress) => {
-        timelineItemCount = Math.max(timelineItemCount, progress.totalItems)
-        await emitProgress({
-          phase: 'timeline',
-          tweets_fetched: progress.tweets,
-          replies_fetched: progress.replies,
-          followers_fetched: 0,
-          following_fetched: 0,
-          api_cost_usd: estimateApifyTimelineCostUsd(progress.totalItems),
-          timeline_run_id: progress.runId,
-        })
-      }, shouldCancel, apifyWebhook)
-      timelineItemCount = timeline.totalItems
-      if (targets.tweets) tweets = timeline.tweets
-      if (targets.replies) replies = timeline.replies
-      if (targets.profile) profile = timeline.profile
-
-      await emitProgress({
-        phase: 'timeline',
-        tweets_fetched: tweets.length,
-        replies_fetched: replies.length,
-        followers_fetched: 0,
-        following_fetched: 0,
-        api_cost_usd: estimateApifyTimelineCostUsd(timelineItemCount),
-      })
-    }
-
+    const timelineRequested = targets.profile || targets.tweets || targets.replies
     const socialGraphMaxItems =
       typeof options?.socialGraphMaxItems === 'number' && Number.isFinite(options.socialGraphMaxItems)
         ? Math.max(1, Math.floor(options.socialGraphMaxItems))
         : undefined
+    const socialGraphRequested = targets.followers || targets.following
+    const socialProgressPhase: TwitterScrapeProgressUpdate['phase'] =
+      targets.followers && targets.following ? 'social_graph' : targets.followers ? 'followers' : 'following'
 
-    let socialGraphItemCount = 0
+    const liveTimelineProgress: TimelineProgress = {
+      tweets: 0,
+      replies: 0,
+      totalItems: 0,
+      runId: undefined,
+    }
+    const liveSocialGraphProgress: SocialGraphProgress = {
+      followers: 0,
+      following: 0,
+      totalItems: 0,
+      runId: undefined,
+    }
 
-    if (targets.followers || targets.following) {
-      const graph = await this.scrapeSocialGraph(username, {
-        followers: targets.followers,
-        following: targets.following,
-      }, socialGraphMaxItems, async (progress) => {
-        socialGraphItemCount = Math.max(socialGraphItemCount, progress.totalItems)
-        const timelineCost = targets.profile || targets.tweets || targets.replies
-          ? estimateApifyTimelineCostUsd(timelineItemCount)
-          : 0
-        await emitProgress({
-          phase: targets.followers && targets.following ? 'social_graph' : targets.followers ? 'followers' : 'following',
-          tweets_fetched: tweets.length,
-          replies_fetched: replies.length,
-          followers_fetched: progress.followers,
-          following_fetched: progress.following,
-          api_cost_usd: roundUsd(timelineCost + estimateApifySocialGraphCostUsd(progress.totalItems)),
-          social_graph_run_id: progress.runId,
-        })
-      }, shouldCancel, apifyWebhook)
+    const emitCombinedProgress = async (
+      phase: TwitterScrapeProgressUpdate['phase'],
+    ) => {
+      const timelineCost = timelineRequested
+        ? estimateApifyTimelineCostUsd(Math.max(timelineItemCount, liveTimelineProgress.totalItems))
+        : 0
+      const socialCost = socialGraphRequested
+        ? estimateApifySocialGraphCostUsd(Math.max(socialGraphItemCount, liveSocialGraphProgress.totalItems))
+        : 0
+
+      await emitProgress({
+        phase,
+        tweets_fetched: liveTimelineProgress.tweets,
+        replies_fetched: liveTimelineProgress.replies,
+        followers_fetched: liveSocialGraphProgress.followers,
+        following_fetched: liveSocialGraphProgress.following,
+        api_cost_usd: roundUsd(timelineCost + socialCost),
+        timeline_run_id: liveTimelineProgress.runId,
+        social_graph_run_id: liveSocialGraphProgress.runId,
+      })
+    }
+
+    const timelinePromise = timelineRequested
+      ? this.scrapeTimeline(
+          username,
+          maxTweets,
+          async (progress) => {
+            timelineItemCount = Math.max(timelineItemCount, progress.totalItems)
+            liveTimelineProgress.tweets = progress.tweets
+            liveTimelineProgress.replies = progress.replies
+            liveTimelineProgress.totalItems = Math.max(liveTimelineProgress.totalItems, progress.totalItems)
+            if (progress.runId) {
+              liveTimelineProgress.runId = progress.runId
+            }
+            await emitCombinedProgress('timeline')
+          },
+          shouldCancel,
+          apifyWebhook,
+        )
+      : Promise.resolve(null)
+
+    const socialGraphPromise = socialGraphRequested
+      ? this.scrapeSocialGraph(
+          username,
+          {
+            followers: targets.followers,
+            following: targets.following,
+          },
+          socialGraphMaxItems,
+          async (progress) => {
+            socialGraphItemCount = Math.max(socialGraphItemCount, progress.totalItems)
+            liveSocialGraphProgress.followers = progress.followers
+            liveSocialGraphProgress.following = progress.following
+            liveSocialGraphProgress.totalItems = Math.max(liveSocialGraphProgress.totalItems, progress.totalItems)
+            if (progress.runId) {
+              liveSocialGraphProgress.runId = progress.runId
+            }
+            await emitCombinedProgress(socialProgressPhase)
+          },
+          shouldCancel,
+          apifyWebhook,
+        )
+      : Promise.resolve(null)
+
+    const [timeline, graph] = await Promise.all([timelinePromise, socialGraphPromise])
+
+    if (timeline) {
+      timelineItemCount = timeline.totalItems
+      if (targets.tweets) tweets = timeline.tweets
+      if (targets.replies) replies = timeline.replies
+      if (targets.profile) profile = timeline.profile
+      liveTimelineProgress.tweets = tweets.length
+      liveTimelineProgress.replies = replies.length
+      liveTimelineProgress.totalItems = Math.max(liveTimelineProgress.totalItems, timeline.totalItems)
+      await emitCombinedProgress('timeline')
+    }
+
+    if (graph) {
       socialGraphItemCount = graph.totalItems
       followers = graph.followers
       following = graph.following
@@ -239,24 +291,17 @@ export class ApifyProvider implements TwitterProvider {
         ...graph.profile,
         ...profile,
       }
-
-      await emitProgress({
-        phase: targets.followers && targets.following ? 'social_graph' : targets.followers ? 'followers' : 'following',
-        tweets_fetched: tweets.length,
-        replies_fetched: replies.length,
-        followers_fetched: followers.length,
-        following_fetched: following.length,
-        api_cost_usd: roundUsd(
-          (targets.profile || targets.tweets || targets.replies ? estimateApifyTimelineCostUsd(timelineItemCount) : 0)
-          + estimateApifySocialGraphCostUsd(socialGraphItemCount),
-        ),
-      })
+      liveSocialGraphProgress.followers = followers.length
+      liveSocialGraphProgress.following = following.length
+      liveSocialGraphProgress.totalItems = Math.max(liveSocialGraphProgress.totalItems, graph.totalItems)
+      await emitCombinedProgress(socialProgressPhase)
     }
 
     const firstAuthor = [...tweets, ...replies].find((item) => item.author?.name || item.author?.profileImageUrl)?.author
     const profileImageUrl = profile.profileImageUrl || firstAuthor?.profileImageUrl
     const coverImageUrl = profile.coverImageUrl
     const displayName = profile.displayName || firstAuthor?.name || username
+    const profileBio = profile.bio
 
     const timelineQueried = targets.profile || targets.tweets || targets.replies
     const timelineCost = timelineQueried ? estimateApifyTimelineCostUsd(timelineItemCount) : 0
@@ -264,7 +309,7 @@ export class ApifyProvider implements TwitterProvider {
     const socialGraphCost = estimateApifySocialGraphCostUsd(socialGraphItemCount)
     const totalCost = roundUsd(timelineCost + socialGraphCost)
 
-    const timelineRequested = targets.tweets || targets.replies
+    const timelinePostsRequested = targets.tweets || targets.replies
     const timelineReturned = tweets.length + replies.length
     const timelineDistributionDivisor = Math.max(1, timelineReturned)
     const tweetWeight = tweets.length / timelineDistributionDivisor
@@ -282,7 +327,7 @@ export class ApifyProvider implements TwitterProvider {
       : false
     const timelineSourceTotal = this.readOptionalCount(profile.statusesCount) ?? 0
     const timelineSourceGap =
-      timelineRequested
+      timelinePostsRequested
       && timelineSourceTotal > 0
       && timelineReturned < timelineSourceTotal
     const partialReasons: string[] = []
@@ -333,11 +378,12 @@ export class ApifyProvider implements TwitterProvider {
         partial_reasons: partialReasons,
         timeline_limit_hit: false,
         social_graph_limit_hit: socialGraphCapHit,
-        tweets_requested: timelineRequested ? maxTweets : 0,
+        tweets_requested: timelinePostsRequested ? maxTweets : 0,
         tweets_received: timelineReturned,
         profileImageUrl,
         coverImageUrl,
         displayName,
+        profileBio,
         profileFollowersCount: profile.followersCount,
         profileFollowingCount: profile.followingCount,
         profileStatusesCount: profile.statusesCount,
@@ -545,22 +591,27 @@ export class ApifyProvider implements TwitterProvider {
     shouldCancel?: () => Promise<boolean> | boolean,
     apifyWebhook?: TwitterScrapeOptions['apifyWebhook'],
   ): Promise<SocialGraphScrape> {
+    const requestedMaxItems =
+      typeof maxItems === 'number' && Number.isFinite(maxItems) && maxItems > 0
+        ? Math.floor(maxItems)
+        : undefined
+    const actorLimits = this.resolveSocialGraphActorLimits(targets, requestedMaxItems)
     console.log(`[Apify] Scraping social graph for @${username}`, {
       ...targets,
-      maxItems: typeof maxItems === 'number' ? maxItems : 'default',
+      maxItems: requestedMaxItems ?? 'default',
+      maxFollowers: actorLimits.maxFollowers,
+      maxFollowings: actorLimits.maxFollowings,
+      actorId: this.userActorId,
     })
 
     try {
       const actorInput: Record<string, unknown> = {
-        twitterHandles: [username],
+        user_names: [username],
+        user_ids: [],
         getFollowers: targets.followers,
         getFollowing: targets.following,
-        getRetweeters: false,
-        // Include suspended/unavailable users so counts better match source totals.
-        includeUnavailableUsers: true,
-      }
-      if (typeof maxItems === 'number' && Number.isFinite(maxItems) && maxItems > 0) {
-        actorInput.maxItems = Math.floor(maxItems)
+        maxFollowers: actorLimits.maxFollowers,
+        maxFollowings: actorLimits.maxFollowings,
       }
 
       const run = await this.client.actor(this.userActorId).start(
@@ -619,6 +670,20 @@ export class ApifyProvider implements TwitterProvider {
       }
 
       const processCandidate = (item: Record<string, unknown>) => {
+        const relationType = this.getSocialRelationType(item)
+        if (relationType === 'follower') {
+          if (targets.followers) {
+            addUserIfNew(item, seenFollowerKeys, progressFollowers)
+          }
+          return
+        }
+        if (relationType === 'following') {
+          if (targets.following) {
+            addUserIfNew(item, seenFollowingKeys, progressFollowing)
+          }
+          return
+        }
+
         const type = (item.type as string | undefined)?.toLowerCase()
         if (type !== 'user') return
 
@@ -902,6 +967,14 @@ export class ApifyProvider implements TwitterProvider {
         (author.name as string | undefined) ||
         (firstWithAuthor?.authorName as string | undefined) ||
         fallbackUsername,
+      bio: this.readOptionalText(
+        author.description,
+        author.bio,
+        author.biography,
+        author.profileBio,
+        firstWithAuthor?.description,
+        firstWithAuthor?.bio,
+      ),
       followersCount: this.readOptionalCount(
         author.followersCount ??
           author.followers_count ??
@@ -1000,19 +1073,41 @@ export class ApifyProvider implements TwitterProvider {
   }
 
   private toSocialUser(candidate: Record<string, unknown>): SocialUser | null {
-    const userId = String(candidate.id || candidate.userId || candidate.accountId || '').trim()
-    const screenName = String(candidate.screenName || candidate.userName || candidate.username || '').trim()
+    const userId = String(
+      candidate.id ??
+        candidate.id_str ??
+        candidate.userId ??
+        candidate.user_id ??
+        candidate.accountId ??
+        '',
+    ).trim()
+    const screenName = String(
+      candidate.screenName ??
+        candidate.screen_name ??
+        candidate.userName ??
+        candidate.username ??
+        '',
+    ).trim().replace(/^@/, '')
     if (!userId && !screenName) return null
 
     const name = String(candidate.name || screenName || userId || 'Unknown').trim()
-    const profileImageUrl =
+    const rawProfileImageUrl =
       (candidate.profileImageUrl as string | undefined) ||
       (candidate.profilePicture as string | undefined) ||
-      undefined
+      (candidate.profile_image_url_https as string | undefined) ||
+      (candidate.profile_image_url as string | undefined)
+    const profileImageUrl = this.normalizeProfileImageUrl(rawProfileImageUrl)
 
-    const userLink = screenName
-      ? `https://x.com/${screenName}`
-      : `https://twitter.com/intent/user?user_id=${userId}`
+    const explicitUserLink =
+      typeof candidate.userLink === 'string' && candidate.userLink.trim().length > 0
+        ? candidate.userLink.trim()
+        : undefined
+
+    const userLink =
+      explicitUserLink
+      || (screenName
+        ? `https://x.com/${screenName}`
+        : `https://twitter.com/intent/user?user_id=${userId}`)
 
     return {
       user_id: userId || screenName,
@@ -1024,6 +1119,9 @@ export class ApifyProvider implements TwitterProvider {
   }
 
   private extractFollowing(items: Record<string, unknown>[], username: string): SocialUser[] {
+    const explicitFollowing = this.extractUsersByRelation(items, (item) => this.getSocialRelationType(item) === 'following')
+    if (explicitFollowing.length > 0) return explicitFollowing
+
     const owner = this.findOwnerUser(items, username)
     const ownerUsername = this.normalizeHandle(
       (owner?.userName as string | undefined) ||
@@ -1043,6 +1141,9 @@ export class ApifyProvider implements TwitterProvider {
   }
 
   private extractFollowers(items: Record<string, unknown>[], username: string): SocialUser[] {
+    const explicitFollowers = this.extractUsersByRelation(items, (item) => this.getSocialRelationType(item) === 'follower')
+    if (explicitFollowers.length > 0) return explicitFollowers
+
     const owner = this.findOwnerUser(items, username)
     const ownerUsername = this.normalizeHandle(
       (owner?.userName as string | undefined) ||
@@ -1072,14 +1173,42 @@ export class ApifyProvider implements TwitterProvider {
     if (!owner) return {}
 
     return {
-      profileImageUrl: this.normalizeProfileImageUrl(owner.profilePicture as string | undefined),
-      coverImageUrl: this.normalizeCoverImageUrl(owner.coverPicture as string | undefined),
+      profileImageUrl: this.normalizeProfileImageUrl(
+        (owner.profilePicture as string | undefined) ||
+          (owner.profileImageUrl as string | undefined) ||
+          (owner.profile_image_url_https as string | undefined) ||
+          (owner.profile_image_url as string | undefined),
+      ),
+      coverImageUrl: this.normalizeCoverImageUrl(
+        (owner.coverPicture as string | undefined) ||
+          (owner.profileBannerUrl as string | undefined) ||
+          (owner.profile_banner_url as string | undefined),
+      ),
       displayName:
         (owner.name as string | undefined) ||
         (owner.userName as string | undefined) ||
+        (owner.username as string | undefined) ||
+        (owner.screen_name as string | undefined) ||
         username,
-      followersCount: this.readOptionalCount(owner.followers),
-      followingCount: this.readOptionalCount(owner.following),
+      bio: this.readOptionalText(
+        owner.description,
+        owner.bio,
+        owner.biography,
+        owner.profileBio,
+      ),
+      followersCount: this.readOptionalCount(
+        owner.followers ??
+          owner.followersCount ??
+          owner.followers_count,
+      ),
+      followingCount: this.readOptionalCount(
+        owner.following ??
+          owner.followingCount ??
+          owner.following_count ??
+          owner.friends ??
+          owner.friendsCount ??
+          owner.friends_count,
+      ),
       statusesCount: this.readOptionalCount(
         owner.statusesCount ??
           owner.statuses_count ??
@@ -1100,7 +1229,65 @@ export class ApifyProvider implements TwitterProvider {
     const byUserName = candidates.find((item) => this.normalizeHandle(item.userName as string | undefined) === requested)
     if (byUserName) return byUserName
 
+    const byScreenName = candidates.find((item) =>
+      this.normalizeHandle(
+        (item.screenName as string | undefined) ||
+          (item.screen_name as string | undefined) ||
+          (item.username as string | undefined),
+      ) === requested,
+    )
+    if (byScreenName) return byScreenName
+
     return candidates[0] || null
+  }
+
+  private getSocialRelationType(item: Record<string, unknown>): 'follower' | 'following' | null {
+    const raw = String(item.type || item.relationship || item.relation || '').trim().toLowerCase()
+    if (raw === 'follower' || raw === 'followers') return 'follower'
+    if (raw === 'following' || raw === 'followings' || raw === 'friend') return 'following'
+    return null
+  }
+
+  private resolveSocialGraphActorLimits(
+    targets: { followers: boolean; following: boolean },
+    maxItems?: number,
+  ): { maxFollowers: number; maxFollowings: number } {
+    if (typeof maxItems !== 'number' || !Number.isFinite(maxItems) || maxItems <= 0) {
+      return {
+        maxFollowers: KAITO_RELATION_DEFAULT_ITEMS,
+        maxFollowings: KAITO_RELATION_DEFAULT_ITEMS,
+      }
+    }
+
+    const safeCap = Math.max(1, Math.floor(maxItems))
+
+    if (targets.followers && targets.following) {
+      const followerShare = Math.floor(safeCap / 2)
+      const followingShare = safeCap - followerShare
+      return {
+        maxFollowers: Math.max(KAITO_RELATION_MIN_ITEMS, followerShare),
+        maxFollowings: Math.max(KAITO_RELATION_MIN_ITEMS, followingShare),
+      }
+    }
+
+    if (targets.followers) {
+      return {
+        maxFollowers: Math.max(KAITO_RELATION_MIN_ITEMS, safeCap),
+        maxFollowings: KAITO_RELATION_MIN_ITEMS,
+      }
+    }
+
+    if (targets.following) {
+      return {
+        maxFollowers: KAITO_RELATION_MIN_ITEMS,
+        maxFollowings: Math.max(KAITO_RELATION_MIN_ITEMS, safeCap),
+      }
+    }
+
+    return {
+      maxFollowers: KAITO_RELATION_MIN_ITEMS,
+      maxFollowings: KAITO_RELATION_MIN_ITEMS,
+    }
   }
 
   private normalizeProfileImageUrl(url?: string): string | undefined {
@@ -1137,6 +1324,15 @@ export class ApifyProvider implements TwitterProvider {
     if (typeof value === 'string') {
       const parsed = Number(value)
       if (Number.isFinite(parsed)) return parsed
+    }
+    return undefined
+  }
+
+  private readOptionalText(...values: unknown[]): string | undefined {
+    for (const value of values) {
+      if (typeof value !== 'string') continue
+      const trimmed = value.trim()
+      if (trimmed.length > 0) return trimmed
     }
     return undefined
   }

@@ -11,11 +11,11 @@ import {
   TWITTER_SCRAPE_LIMITS,
   USER_STORAGE_LIMITS,
 } from '@/lib/platforms/twitter/limits'
-import { getTwitterApiUsageSummary } from '@/lib/platforms/twitter/api-usage'
+import { getRequestActorId, resolveActorForWrite, setActorSessionCookie } from '@/lib/request-actor'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient as createServerClient } from '@/lib/supabase/server'
 import { getTwitterProvider } from '@/lib/twitter/twitter-service'
 import type { TwitterScrapeTargets } from '@/lib/twitter/types'
+import { sendAdminEventEmail } from '@/lib/notifications/admin-event-email'
 import {
   estimateApifySocialGraphCostUsd,
   estimateApifyTimelineCostUsd,
@@ -27,6 +27,7 @@ import { calculateUserStorageSummary } from '@/lib/storage/usage'
 
 const supabase = createAdminClient()
 const TWITTER_USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/
+const GUEST_BACKUP_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const DEFAULT_SCRAPE_TARGETS: TwitterScrapeTargets = {
   profile: true,
   tweets: true,
@@ -40,10 +41,6 @@ function extractInngestEventIds(response: unknown): string[] {
   const ids = (response as { ids?: unknown }).ids
   if (!Array.isArray(ids)) return []
   return ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
-}
-
-function formatUsd(value: number): string {
-  return `$${roundUsd(value).toFixed(2)}`
 }
 
 function parseScrapeTargets(value: unknown): TwitterScrapeTargets | null {
@@ -107,21 +104,69 @@ function parsePositiveInteger(value: unknown): number | null {
   return parsed
 }
 
+function parseIncludeMedia(value: unknown): boolean | null {
+  if (value === undefined || value === null) return true
+  if (typeof value === 'boolean') return value
+  return null
+}
+
+function describeEnabledTargets(targets: TwitterScrapeTargets): string {
+  const entries: Array<[keyof TwitterScrapeTargets, string]> = [
+    ['profile', 'profile'],
+    ['tweets', 'tweets'],
+    ['replies', 'replies'],
+    ['followers', 'followers'],
+    ['following', 'following'],
+  ]
+  const enabled = entries.filter(([key]) => targets[key]).map(([, label]) => label)
+  return enabled.length > 0 ? enabled.join(', ') : 'none'
+}
+
+type BackupRetention = {
+  mode: 'account' | 'guest_30d'
+  expiresAtIso: string | null
+}
+
+async function resolveBackupRetention(actorId: string, forceGuestRetention: boolean): Promise<BackupRetention> {
+  if (forceGuestRetention) {
+    return {
+      mode: 'guest_30d',
+      expiresAtIso: new Date(Date.now() + GUEST_BACKUP_TTL_MS).toISOString(),
+    }
+  }
+
+  try {
+    const { data, error } = await supabase.auth.admin.getUserById(actorId)
+    if (error || !data?.user) {
+      return { mode: 'account', expiresAtIso: null }
+    }
+    const metadata =
+      data.user.user_metadata && typeof data.user.user_metadata === 'object' && !Array.isArray(data.user.user_metadata)
+        ? (data.user.user_metadata as Record<string, unknown>)
+        : {}
+    const isGuest = metadata.is_guest === true
+    if (!isGuest) {
+      return { mode: 'account', expiresAtIso: null }
+    }
+    return {
+      mode: 'guest_30d',
+      expiresAtIso: new Date(Date.now() + GUEST_BACKUP_TTL_MS).toISOString(),
+    }
+  } catch {
+    return { mode: 'account', expiresAtIso: null }
+  }
+}
+
 export async function POST(request: Request) {
   try {
-    const authClient = await createServerClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await authClient.auth.getUser()
+    const initialActorId = await getRequestActorId()
+    const actorResolution = await resolveActorForWrite(supabase, initialActorId)
+    const actorId = actorResolution.actorId
+    const retention = await resolveBackupRetention(actorId, actorResolution.shouldSetCookie)
 
-    if (authError || !user) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const activeJob = await findActiveBackupJobForUser(supabase, user.id)
+    const activeJob = await findActiveBackupJobForUser(supabase, actorId)
     if (activeJob) {
-      return NextResponse.json(
+      const conflictResponse = NextResponse.json(
         {
           success: false,
           error: 'A backup job is already in progress. Please wait for it to finish before starting another one.',
@@ -129,10 +174,14 @@ export async function POST(request: Request) {
         },
         { status: 409 },
       )
+      if (actorResolution.shouldSetCookie) {
+        setActorSessionCookie(conflictResponse, actorId)
+      }
+      return conflictResponse
     }
 
     const body = await request.json()
-    const { username, maxTweets, targets } = body
+    const { username, maxTweets, targets, includeMedia } = body
 
     if (!username) {
       return NextResponse.json({ success: false, error: 'Username is required' }, { status: 400 })
@@ -168,7 +217,18 @@ export async function POST(request: Request) {
       )
     }
 
-    const storageSummary = await calculateUserStorageSummary(supabase, user.id)
+    const parsedIncludeMedia = parseIncludeMedia(includeMedia)
+    if (parsedIncludeMedia === null) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid includeMedia value. It must be a boolean.',
+        },
+        { status: 400 },
+      )
+    }
+
+    const storageSummary = await calculateUserStorageSummary(supabase, actorId)
     if (storageSummary.totalBytes >= USER_STORAGE_LIMITS.maxTotalBytes) {
       return NextResponse.json(
         {
@@ -181,6 +241,8 @@ export async function POST(request: Request) {
 
     const needsTimelineScrape = parsedTargets.tweets || parsedTargets.replies
     const includesSocialGraph = parsedTargets.followers || parsedTargets.following
+    const freeTimelineItemsLimit = Math.max(1, Math.floor(TWITTER_SCRAPE_LIMITS.maxTweetsAndReplies))
+    const freeSocialGraphItemsLimit = Math.max(200, Math.floor(TWITTER_SCRAPE_LIMITS.maxFollowersAndFollowing))
     const hasExplicitMaxTweets = hasExplicitValue(maxTweets)
     let explicitTweetLimit: number | null = null
 
@@ -193,6 +255,15 @@ export async function POST(request: Request) {
             error: 'Invalid maxTweets value. It must be a positive integer.',
           },
           { status: 400 },
+        )
+      }
+      if (explicitTweetLimit > freeTimelineItemsLimit) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Current limit for free users is ${freeTimelineItemsLimit.toLocaleString()} tweets + replies per snapshot.`,
+          },
+          { status: 429 },
         )
       }
     }
@@ -208,19 +279,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const apiUsage = await getTwitterApiUsageSummary(supabase, user.id)
-    if (apiUsage.remainingUsd <= 0) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Monthly snapshot token budget reached (${formatUsd(apiUsage.spentUsd)} / ${formatUsd(apiUsage.limitUsd)}).`,
-          apiUsage,
-        },
-        { status: 429 },
-      )
-    }
-
-    const effectiveRunBudgetUsd = roundUsd(Math.min(TWITTER_SCRAPE_API_LIMITS.maxCostPerRunUsd, apiUsage.remainingUsd))
+    const effectiveRunBudgetUsd = roundUsd(TWITTER_SCRAPE_API_LIMITS.maxCostPerRunUsd)
 
     let tweetsToScrape = 0
     if (needsTimelineScrape) {
@@ -237,7 +296,7 @@ export async function POST(request: Request) {
       } else {
         tweetsToScrape = maxApifyTimelineItemsForBudget(effectiveRunBudgetUsd)
       }
-      tweetsToScrape = Math.max(1, Math.floor(tweetsToScrape))
+      tweetsToScrape = Math.max(1, Math.min(Math.floor(tweetsToScrape), freeTimelineItemsLimit))
     } else if (parsedTargets.profile) {
       tweetsToScrape = 1
     }
@@ -249,8 +308,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: `This request needs at least ${formatUsd(estimatedTimelineCostUsd)} in snapshot tokens for timeline/profile data, but only ${formatUsd(effectiveRunBudgetUsd)} is currently available for a single run.`,
-          apiUsage,
+          error: 'Requested scrape size exceeds current run budget. Try a lower maxTweets value.',
         },
         { status: 429 },
       )
@@ -261,13 +319,28 @@ export async function POST(request: Request) {
     let estimatedSocialGraphCostUsd = 0
 
     if (includesSocialGraph) {
-      socialGraphMaxItems = maxApifySocialGraphItemsForBudget(budgetForSocialGraphUsd)
+      socialGraphMaxItems = Math.min(
+        maxApifySocialGraphItemsForBudget(budgetForSocialGraphUsd),
+        freeSocialGraphItemsLimit,
+      )
       if (socialGraphMaxItems <= 0) {
         return NextResponse.json(
           {
             success: false,
-            error: 'Current snapshot token budget cannot fetch followers/following in this run. Increase token limits or uncheck followers/following.',
-            apiUsage,
+            error: 'Current run budget cannot fetch followers/following in this run.',
+          },
+          { status: 429 },
+        )
+      }
+      const minimumSocialGraphItems =
+        parsedTargets.followers && parsedTargets.following
+          ? 400
+          : 200
+      if (socialGraphMaxItems < minimumSocialGraphItems) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Current run budget cannot fetch followers/following in this run. Minimum required social graph items: ${minimumSocialGraphItems}.`,
           },
           { status: 429 },
         )
@@ -289,7 +362,7 @@ export async function POST(request: Request) {
     }
 
     const job = await createBackupJob(supabase, {
-      userId: user.id,
+      userId: actorId,
       jobType: 'snapshot_scrape',
       message: 'Snapshot requested. Waiting to start...',
       payload: {
@@ -297,6 +370,9 @@ export async function POST(request: Request) {
         username: username.trim(),
         max_tweets: tweetsToScrape,
         targets: parsedTargets,
+        include_media: parsedIncludeMedia,
+        retention_mode: retention.mode,
+        retention_expires_at: retention.expiresAtIso,
         social_graph_max_items: socialGraphMaxItems ?? null,
         partial_backup_id: null,
         apify_webhook: {
@@ -320,9 +396,9 @@ export async function POST(request: Request) {
           api_cost_usd: 0,
         },
         api_budget: {
-          monthly_spent_usd: apiUsage.spentUsd,
-          monthly_limit_usd: apiUsage.limitUsd,
-          monthly_remaining_usd: apiUsage.remainingUsd,
+          monthly_spent_usd: 0,
+          monthly_limit_usd: 0,
+          monthly_remaining_usd: 0,
           per_run_limit_usd: roundUsd(TWITTER_SCRAPE_API_LIMITS.maxCostPerRunUsd),
           effective_run_budget_usd: effectiveRunBudgetUsd,
           estimated_timeline_cost_usd: estimatedTimelineCostUsd,
@@ -333,14 +409,34 @@ export async function POST(request: Request) {
     })
 
     try {
+      await sendAdminEventEmail({
+        subject: 'Backup requested',
+        title: 'New backup request',
+        details: [
+          { label: 'Actor ID', value: actorId },
+          { label: 'Job ID', value: job.id },
+          { label: 'Username', value: username.trim() },
+          { label: 'Targets', value: describeEnabledTargets(parsedTargets) },
+          { label: 'Include media', value: parsedIncludeMedia ? 'yes' : 'no' },
+          { label: 'Retention mode', value: retention.mode },
+          { label: 'UA', value: request.headers.get('user-agent') || 'unknown' },
+        ],
+      })
+    } catch (notificationError) {
+      console.warn('[Scrape API] Failed to send admin backup-request notification:', notificationError)
+    }
+
+    try {
       const sendResult = await inngest.send({
         name: 'backup/snapshot-scrape.requested',
         data: {
           jobId: job.id,
-          userId: user.id,
+          userId: actorId,
           username: username.trim(),
           tweetsToScrape,
           targets: parsedTargets,
+          includeMedia: parsedIncludeMedia,
+          retention,
           socialGraphMaxItems,
           apifyWebhook:
             apifyWebhookEnabled && apifyWebhookBaseUrl
@@ -350,9 +446,9 @@ export async function POST(request: Request) {
                 }
               : undefined,
           apiBudget: {
-            monthlySpentBeforeRunUsd: apiUsage.spentUsd,
-            monthlyLimitUsd: apiUsage.limitUsd,
-            monthlyRemainingUsd: apiUsage.remainingUsd,
+            monthlySpentBeforeRunUsd: 0,
+            monthlyLimitUsd: 0,
+            monthlyRemainingUsd: 0,
             perRunLimitUsd: roundUsd(TWITTER_SCRAPE_API_LIMITS.maxCostPerRunUsd),
             effectiveRunBudgetUsd,
             estimatedTimelineCostUsd,
@@ -377,7 +473,7 @@ export async function POST(request: Request) {
       throw enqueueError
     }
 
-    return NextResponse.json({
+    const queuedResponse = NextResponse.json({
       success: true,
       message: 'Snapshot queued. Your job is now running in the background.',
       budget: {
@@ -387,15 +483,19 @@ export async function POST(request: Request) {
         estimatedMaxRunCostUsd,
         socialGraphMaxItems: socialGraphMaxItems ?? null,
       },
-      apiUsage,
       job,
     })
+    if (actorResolution.shouldSetCookie) {
+      setActorSessionCookie(queuedResponse, actorId)
+    }
+    return queuedResponse
   } catch (error) {
     console.error('[Scrape API] Error:', error)
+    const message = error instanceof Error ? error.message : 'Failed to scrape Twitter data'
     return NextResponse.json(
       {
         success: false,
-        error: 'Failed to scrape Twitter data',
+        error: message,
       },
       { status: 500 },
     )

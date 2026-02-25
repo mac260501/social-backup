@@ -1,8 +1,7 @@
 'use client'
 
-import { useRouter, useParams } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { User } from '@supabase/supabase-js'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useCallback, useEffect, useState } from 'react'
 import { BackupViewer } from '@/components/platforms/twitter/backup/BackupViewer'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
 import { createClient } from '@/lib/supabase/client'
@@ -12,32 +11,60 @@ type BackupRecord = {
   [key: string]: unknown
 }
 
+function getGuestDaysLeft(backup: BackupRecord | null): number | null {
+  if (!backup || typeof backup !== 'object') return null
+  const data = backup.data && typeof backup.data === 'object' && !Array.isArray(backup.data)
+    ? (backup.data as Record<string, unknown>)
+    : null
+  if (!data) return null
+  const retention = data.retention && typeof data.retention === 'object' && !Array.isArray(data.retention)
+    ? (data.retention as Record<string, unknown>)
+    : null
+  if (!retention) return null
+  if (retention.mode !== 'guest_30d') return null
+  const expiresAtIso = typeof retention.expires_at === 'string' ? retention.expires_at : ''
+  if (!expiresAtIso) return null
+  const expiresAtMs = Date.parse(expiresAtIso)
+  if (!Number.isFinite(expiresAtMs)) return null
+  const remainingMs = expiresAtMs - Date.now()
+  if (remainingMs <= 0) return 0
+  return Math.ceil(remainingMs / (24 * 60 * 60 * 1000))
+}
+
 export default function BackupDetailPage() {
   const router = useRouter()
-  const supabase = useMemo(() => createClient(), [])
+  const searchParams = useSearchParams()
   const params = useParams()
   const backupId = params.backupId as string
 
-  const [user, setUser] = useState<User | null>(null)
-  const [authLoading, setAuthLoading] = useState(true)
   const [backup, setBackup] = useState<BackupRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
 
   const fetchBackup = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
 
-      const response = await fetch('/api/backups')
+      const isShared = searchParams.get('shared') === '1'
+      if (isShared) {
+        const sharedResponse = await fetch(`/api/backups/shared?backupId=${backupId}`, { cache: 'no-store' })
+        const sharedResult = (await sharedResponse.json()) as { success?: boolean; error?: string; backup?: BackupRecord }
+        if (sharedResponse.ok && sharedResult.success && sharedResult.backup) {
+          setBackup(sharedResult.backup)
+          return
+        }
+      }
+
+      const response = await fetch('/api/backups', { cache: 'no-store' })
       const result = (await response.json()) as { success?: boolean; error?: string; backups?: BackupRecord[] }
 
       if (!result.success) {
         throw new Error(result.error || 'Failed to fetch backup')
       }
 
-      const foundBackup = result.backups?.find((b) => b.id === backupId)
-
+      const foundBackup = result.backups?.find((item) => item.id === backupId)
       if (!foundBackup) {
         throw new Error('Backup not found')
       }
@@ -49,47 +76,39 @@ export default function BackupDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [backupId])
+  }, [backupId, searchParams])
 
   useEffect(() => {
-    const init = async () => {
+    void fetchBackup()
+  }, [fetchBackup])
+
+  useEffect(() => {
+    const supabase = createClient()
+    const loadAuth = async () => {
       const {
-        data: { user: currentUser }
+        data: { user },
       } = await supabase.auth.getUser()
-
-      if (!currentUser) {
-        router.push('/login')
-        return
-      }
-
-      setUser(currentUser)
-      await fetchBackup()
-      setAuthLoading(false)
+      setIsAuthenticated(Boolean(user))
     }
+    void loadAuth()
+  }, [])
 
-    init()
-  }, [router, supabase, fetchBackup])
-
-  if (authLoading || loading) {
+  if (loading) {
     return <ThemeLoadingScreen label="Loading backup..." />
-  }
-
-  if (!user) {
-    return null
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
         <div className="text-center">
-          <div className="text-red-500 text-5xl mb-4">⚠️</div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Error Loading Backup</h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-4">{error}</p>
+          <div className="mb-4 text-5xl text-red-500">⚠️</div>
+          <h2 className="mb-2 text-xl font-semibold text-gray-900 dark:text-white">Error Loading Backup</h2>
+          <p className="mb-4 text-gray-600 dark:text-gray-400">{error}</p>
           <button
-            onClick={() => router.push('/dashboard?tab=all-backups')}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+            onClick={() => router.push('/')}
+            className="rounded-lg bg-blue-500 px-4 py-2 text-white hover:bg-blue-600"
           >
-            Back to Backups
+            Back to Home
           </button>
         </div>
       </div>
@@ -100,5 +119,21 @@ export default function BackupDetailPage() {
     return null
   }
 
-  return <BackupViewer backup={backup} />
+  const guestDaysLeft = getGuestDaysLeft(backup)
+
+  return (
+    <>
+      {!isAuthenticated && guestDaysLeft !== null && (
+        <div className="fixed right-4 top-4 z-30 rounded-xl border border-amber-300/70 bg-amber-50/95 px-3 py-2 text-right shadow-sm dark:border-amber-500/40 dark:bg-amber-950/70">
+          <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+            {guestDaysLeft} day{guestDaysLeft === 1 ? '' : 's'} before deletion
+          </p>
+          <a href="/signup" className="text-xs font-semibold text-blue-700 hover:underline dark:text-blue-300">
+            Sign up to keep this backup
+          </a>
+        </div>
+      )}
+      <BackupViewer backup={backup} />
+    </>
+  )
 }
