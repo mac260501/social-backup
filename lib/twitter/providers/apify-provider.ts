@@ -99,11 +99,15 @@ type SocialGraphProgress = {
  * - apidojo/tweet-scraper (profile timeline + with_replies timeline)
  * - apidojo/twitter-scraper-lite (targeted pinned tweet recovery by status URL)
  * - kaitoeasyapi/premium-x-follower-scraper-following-data (followers, following)
+ * - apidojo/twitter-user-scraper (fallback profile metadata when sparse accounts return no owner row)
  */
 export class ApifyProvider implements TwitterProvider {
   private apiKey: string
   private profileActorId = 'apidojo/tweet-scraper'
   private pinnedTweetActorId = 'apidojo/twitter-scraper-lite'
+  private fallbackProfileActorId =
+    process.env.TWITTER_APIFY_PROFILE_FALLBACK_ACTOR_ID
+    || 'apidojo/twitter-user-scraper'
   private userActorId =
     process.env.TWITTER_APIFY_SOCIAL_GRAPH_ACTOR_ID
     || 'kaitoeasyapi/premium-x-follower-scraper-following-data'
@@ -287,14 +291,25 @@ export class ApifyProvider implements TwitterProvider {
       following = graph.following
       // Even when "profile" isn't explicitly selected, user-scraper returns the owner row.
       // Use it to keep profile display/counts accurate for followers/following-only snapshots.
-      profile = {
-        ...graph.profile,
-        ...profile,
-      }
+      profile = this.mergeProfileMetadata(profile, graph.profile)
       liveSocialGraphProgress.followers = followers.length
       liveSocialGraphProgress.following = following.length
       liveSocialGraphProgress.totalItems = Math.max(liveSocialGraphProgress.totalItems, graph.totalItems)
       await emitCombinedProgress(socialProgressPhase)
+    }
+
+    if (targets.profile && !profile.profileImageUrl) {
+      try {
+        const fallbackProfile = await this.scrapeFallbackProfileMetadata(
+          username,
+          shouldCancel,
+          apifyWebhook,
+        )
+        profile = this.mergeProfileMetadata(profile, fallbackProfile)
+      } catch (fallbackError) {
+        if (fallbackError instanceof RunCancelledError) throw fallbackError
+        console.warn('[Apify] Fallback profile metadata scrape failed:', fallbackError)
+      }
     }
 
     const firstAuthor = [...tweets, ...replies].find((item) => item.author?.name || item.author?.profileImageUrl)?.author
@@ -1328,6 +1343,18 @@ export class ApifyProvider implements TwitterProvider {
     return undefined
   }
 
+  private mergeProfileMetadata(base: ProfileMetadata, incoming: ProfileMetadata): ProfileMetadata {
+    return {
+      profileImageUrl: incoming.profileImageUrl ?? base.profileImageUrl,
+      coverImageUrl: incoming.coverImageUrl ?? base.coverImageUrl,
+      displayName: incoming.displayName ?? base.displayName,
+      bio: incoming.bio ?? base.bio,
+      followersCount: incoming.followersCount ?? base.followersCount,
+      followingCount: incoming.followingCount ?? base.followingCount,
+      statusesCount: incoming.statusesCount ?? base.statusesCount,
+    }
+  }
+
   private readOptionalText(...values: unknown[]): string | undefined {
     for (const value of values) {
       if (typeof value !== 'string') continue
@@ -1368,6 +1395,40 @@ export class ApifyProvider implements TwitterProvider {
 
   private normalizeHandle(handle?: string): string {
     return (handle || '').replace(/^@/, '').trim().toLowerCase()
+  }
+
+  private async scrapeFallbackProfileMetadata(
+    username: string,
+    shouldCancel?: () => Promise<boolean> | boolean,
+    apifyWebhook?: TwitterScrapeOptions['apifyWebhook'],
+  ): Promise<ProfileMetadata> {
+    const run = await this.client.actor(this.fallbackProfileActorId).start(
+      {
+        twitterHandles: [username],
+        getFollowers: true,
+        getFollowing: false,
+        includeUnavailableUsers: true,
+        maxItems: 20,
+      },
+      this.buildRunWebhooks(apifyWebhook, 'social_graph'),
+    )
+
+    if (!run.id || !run.defaultDatasetId) {
+      throw new Error('Fallback profile actor did not return run metadata.')
+    }
+
+    const polled = await this.pollRunDatasetItems({
+      runId: run.id,
+      datasetId: run.defaultDatasetId,
+      maxItems: 50,
+      shouldCancel,
+    })
+
+    if (polled.finalStatus !== 'SUCCEEDED') {
+      throw new Error(`Fallback profile actor finished with status ${polled.finalStatus}.`)
+    }
+
+    return this.extractProfileFromSocialGraph(polled.items, username)
   }
 
   private isRunTerminalStatus(status: string | undefined): boolean {

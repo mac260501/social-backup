@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { getRequestActorId } from '@/lib/request-actor'
 import { getShareGrantFromCookies } from '@/lib/share-links'
 import { buildInternalMediaUrl } from '@/lib/storage/media-url'
-import { listObjectPaths, parseLegacyStoragePath } from '@/lib/storage/r2'
+import { parseLegacyStoragePath } from '@/lib/storage/r2'
 
 const supabase = createAdminClient()
 
@@ -145,8 +145,8 @@ export async function GET(request: Request) {
       headerFile = candidateFiles.find((f) => f.file_path !== avatarFile!.file_path) || null
     }
 
-    let avatarFilePath = avatarFile?.file_path || null
-    let headerFilePath = headerFile?.file_path || null
+    const avatarFilePath = avatarFile?.file_path || null
+    const headerFilePath = headerFile?.file_path || null
 
     const hasExplicitProfileReference = Boolean(
       storedProfileImageFilename ||
@@ -165,40 +165,6 @@ export async function GET(request: Request) {
         profileImageUrl: null,
         coverImageUrl: null,
       })
-    }
-
-    const shouldUseStorageFolderFallback =
-      isProfileIncludedInSnapshot !== false && (!avatarFilePath || !headerFilePath) && (candidateFiles.length > 0 || hasExplicitProfileReference)
-
-    if (shouldUseStorageFolderFallback) {
-      const backupOwnerId = typeof backup.user_id === 'string' ? backup.user_id : actorId || ''
-      const mediaFolders = [`${backupOwnerId}/profile_media`, `${backupOwnerId}/profiles_media`]
-
-      const listedFiles = (
-        await Promise.all(
-          mediaFolders.map(async (folder) => {
-            const objectPaths = await listObjectPaths(folder, 100)
-            return objectPaths.map((filePath) => ({
-              file_path: filePath,
-              file_name: filePath.split('/').pop() || filePath,
-            }))
-          }),
-        )
-      ).flat()
-
-      if (!avatarFilePath) {
-        const storageAvatar = listedFiles.find(
-          (f) => f.file_name.includes('profile_image') || f.file_name.includes('avatar') || f.file_name.includes('400x400'),
-        )
-        avatarFilePath = storageAvatar?.file_path || listedFiles[0]?.file_path || null
-      }
-
-      if (!headerFilePath) {
-        const storageHeader = listedFiles.find(
-          (f) => f.file_name.includes('header') || f.file_name.includes('banner') || f.file_name.includes('cover'),
-        )
-        headerFilePath = storageHeader?.file_path || listedFiles.find((f) => f.file_path !== avatarFilePath)?.file_path || null
-      }
     }
 
     const firstTweetWithAvatar =

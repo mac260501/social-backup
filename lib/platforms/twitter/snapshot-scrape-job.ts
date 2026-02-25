@@ -156,7 +156,7 @@ async function processScrapedProfileMedia(
       const buffer = Buffer.from(arrayBuffer)
       const contentType = response.headers.get('content-type') || 'image/jpeg'
 
-      const storagePath = `${userId}/profile_media/${filename}`
+      const storagePath = `${userId}/profile_media/${backupId}/${filename}`
       await uploadObjectToR2({
         key: storagePath,
         body: buffer,
