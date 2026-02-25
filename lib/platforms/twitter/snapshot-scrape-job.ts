@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
+  getBackupJobForUser,
   isBackupJobCancellationRequested,
   markBackupJobCompleted,
   markBackupJobCleanup,
@@ -9,6 +10,7 @@ import {
   mergeBackupJobPayload,
 } from '@/lib/jobs/backup-jobs'
 import { deleteBackupAndStorageById } from '@/lib/backups/delete-backup-data'
+import { resolveConfiguredAppBaseUrl, sendBackupReadyEmail } from '@/lib/notifications/backup-ready-email'
 import { recalculateAndPersistBackupStorage } from '@/lib/storage/usage'
 import { getTwitterProvider } from '@/lib/twitter/twitter-service'
 import type { Tweet, TwitterScrapeTargets } from '@/lib/twitter/types'
@@ -25,6 +27,26 @@ const OPTIONAL_MEDIA_FILE_COLUMNS = new Set([
   'media_type',
   'tweet_id',
 ])
+const DEFAULT_MEDIA_WORKER_COUNT = 6
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function resolveMediaWorkerCount(): number {
+  const raw = process.env.TWITTER_SCRAPE_MEDIA_WORKERS
+  if (!raw) return DEFAULT_MEDIA_WORKER_COUNT
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MEDIA_WORKER_COUNT
+  return Math.max(1, Math.min(16, parsed))
+}
+
+function readTrimmed(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
 
 type SnapshotLiveMetrics = {
   phase: string
@@ -174,17 +196,22 @@ async function processScrapedProfileMedia(
   let profileStoragePath: string | null = null
   let coverStoragePath: string | null = null
 
+  const uploads: Array<Promise<void>> = []
   if (profileImageUrl) {
-    if (ensureActive) await ensureActive()
-    profileStoragePath = await uploadImage(profileImageUrl, 'profile_photo_400x400.jpg')
-    if (onMediaProcessed) await onMediaProcessed()
+    uploads.push((async () => {
+      if (ensureActive) await ensureActive()
+      profileStoragePath = await uploadImage(profileImageUrl, 'profile_photo_400x400.jpg')
+      if (onMediaProcessed) await onMediaProcessed()
+    })())
   }
-
   if (coverImageUrl) {
-    if (ensureActive) await ensureActive()
-    coverStoragePath = await uploadImage(coverImageUrl, 'cover_photo.jpg')
-    if (onMediaProcessed) await onMediaProcessed()
+    uploads.push((async () => {
+      if (ensureActive) await ensureActive()
+      coverStoragePath = await uploadImage(coverImageUrl, 'cover_photo.jpg')
+      if (onMediaProcessed) await onMediaProcessed()
+    })())
   }
+  await Promise.all(uploads)
 
   if (profileStoragePath || coverStoragePath) {
     const { data: backup } = await supabase.from('backups').select('data').eq('id', backupId).single()
@@ -218,44 +245,78 @@ async function processScrapedMedia(
 ) {
   let processedCount = 0
   let errorCount = 0
-  let totalCount = 0
+  const queuedMedia: Array<{
+    tweetId: string
+    media: NonNullable<Tweet['media']>[number]
+  }> = []
 
   for (const tweet of tweetsWithMedia) {
     if (!tweet.media || tweet.media.length === 0) continue
-
     for (const media of tweet.media) {
-      totalCount += 1
-      if (ensureActive && totalCount % 5 === 1) {
-        await ensureActive()
+      queuedMedia.push({
+        tweetId: tweet.id,
+        media,
+      })
+    }
+  }
+
+  const totalCount = queuedMedia.length
+  if (totalCount === 0) {
+    console.log('[Scraped Media] Complete: 0 processed, 0 errors, 0 total')
+    return
+  }
+
+  const seenStoragePaths = new Set<string>()
+  const workerCount = Math.min(resolveMediaWorkerCount(), totalCount)
+  let nextIndex = 0
+
+  const getNextMedia = () => {
+    if (nextIndex >= totalCount) return null
+    const index = nextIndex
+    nextIndex += 1
+    return {
+      index,
+      item: queuedMedia[index],
+    }
+  }
+
+  const processSingleMedia = async (
+    tweetId: string,
+    media: NonNullable<Tweet['media']>[number],
+    itemIndex: number,
+  ) => {
+    if (ensureActive && itemIndex % 4 === 0) {
+      await ensureActive()
+    }
+
+    try {
+      if (!media.media_url) {
+        return
       }
 
-      try {
-        if (!media.media_url) {
-          continue
-        }
+      const response = await fetch(media.media_url)
+      if (!response.ok) {
+        errorCount++
+        return
+      }
 
-        const response = await fetch(media.media_url)
-        if (!response.ok) {
-          errorCount++
-          continue
-        }
+      const arrayBuffer = await response.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
 
-        const arrayBuffer = await response.arrayBuffer()
-        const buffer = Buffer.from(arrayBuffer)
+      const urlParts = media.media_url.split('/')
+      const filename = urlParts[urlParts.length - 1] || `${tweetId}-${media.type}`
 
-        const urlParts = media.media_url.split('/')
-        const filename = urlParts[urlParts.length - 1] || `${tweet.id}-${media.type}`
+      const mimeType = media.type === 'photo' ? 'image/jpeg' : media.type === 'video' ? 'video/mp4' : 'image/gif'
+      const storagePath = `${userId}/scraped_media/${filename}`
+      await uploadObjectToR2({
+        key: storagePath,
+        body: buffer,
+        contentType: mimeType,
+        upsert: true,
+      })
 
-        const mimeType = media.type === 'photo' ? 'image/jpeg' : media.type === 'video' ? 'video/mp4' : 'image/gif'
-
-        const storagePath = `${userId}/scraped_media/${filename}`
-        await uploadObjectToR2({
-          key: storagePath,
-          body: buffer,
-          contentType: mimeType,
-          upsert: true,
-        })
-
+      if (!seenStoragePaths.has(storagePath)) {
+        seenStoragePaths.add(storagePath)
         const metadataRecord = {
           user_id: userId,
           backup_id: backupId,
@@ -264,7 +325,7 @@ async function processScrapedMedia(
           file_size: buffer.length,
           mime_type: mimeType,
           media_type: 'scraped_media',
-          tweet_id: tweet.id,
+          tweet_id: tweetId,
         }
 
         const { data: existing } = await supabase
@@ -279,23 +340,32 @@ async function processScrapedMedia(
           if (insertError) {
             console.error(`[Scraped Media] DB insert error for ${filename}:`, insertError)
             errorCount++
-            continue
+            return
           }
         }
-
-        const internalUrl = buildInternalMediaUrl(storagePath)
-        media.media_url = internalUrl
-        media.media_url_https = internalUrl
-
-        processedCount++
-      } catch (error) {
-        console.error('[Scraped Media] Error processing media:', error)
-        errorCount++
-      } finally {
-        if (onMediaProcessed) await onMediaProcessed()
       }
+
+      const internalUrl = buildInternalMediaUrl(storagePath)
+      media.media_url = internalUrl
+      media.media_url_https = internalUrl
+      processedCount++
+    } catch (error) {
+      console.error('[Scraped Media] Error processing media:', error)
+      errorCount++
+    } finally {
+      if (onMediaProcessed) await onMediaProcessed()
     }
   }
+
+  const worker = async () => {
+    while (true) {
+      const next = getNextMedia()
+      if (!next) return
+      await processSingleMedia(next.item.tweetId, next.item.media, next.index)
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
 
   console.log(`[Scraped Media] Complete: ${processedCount} processed, ${errorCount} errors, ${totalCount} total`)
 }
@@ -306,6 +376,11 @@ export async function processSnapshotScrapeJob(params: {
   username: string
   tweetsToScrape: number
   targets: TwitterScrapeTargets
+  includeMedia?: boolean
+  retention?: {
+    mode: 'account' | 'guest_30d'
+    expiresAtIso: string | null
+  }
   socialGraphMaxItems?: number
   apifyWebhook?: {
     baseUrl: string
@@ -322,7 +397,8 @@ export async function processSnapshotScrapeJob(params: {
     estimatedMaxRunCostUsd: number
   }
 }) {
-  const { jobId, userId, username, tweetsToScrape, targets, socialGraphMaxItems, apifyWebhook, apiBudget } = params
+  const { jobId, userId, username, tweetsToScrape, targets, includeMedia, retention, socialGraphMaxItems, apifyWebhook, apiBudget } = params
+  const shouldIncludeMedia = includeMedia !== false
   let backupId: string | null = null
   const apifyRuns: SnapshotApifyRuns = {
     timeline_run_id: null,
@@ -459,8 +535,10 @@ export async function processSnapshotScrapeJob(params: {
     const profileFollowingCount = result.metadata.profileFollowingCount || 0
     const followersDisplayCount = Math.max(scrapedFollowersCount, profileFollowersCount)
     const followingDisplayCount = Math.max(scrapedFollowingCount, profileFollowingCount)
-    const profileMediaCount = targets.profile ? (result.metadata.profileImageUrl ? 1 : 0) + (result.metadata.coverImageUrl ? 1 : 0) : 0
-    const totalMediaCount = tweetMediaCount + profileMediaCount
+    const profileMediaCount = shouldIncludeMedia && targets.profile
+      ? (result.metadata.profileImageUrl ? 1 : 0) + (result.metadata.coverImageUrl ? 1 : 0)
+      : 0
+    const totalMediaCount = shouldIncludeMedia ? tweetMediaCount + profileMediaCount : 0
 
     await syncLiveMetrics({
       phase: 'saving',
@@ -487,6 +565,8 @@ export async function processSnapshotScrapeJob(params: {
         profile: {
           username: result.metadata.username,
           displayName: result.metadata.displayName,
+          description: result.metadata.profileBio,
+          bio: result.metadata.profileBio,
           profileImageUrl: result.metadata.profileImageUrl,
           coverImageUrl: result.metadata.coverImageUrl,
           followersCount: result.metadata.profileFollowersCount,
@@ -521,8 +601,18 @@ export async function processSnapshotScrapeJob(params: {
             estimated_social_graph_cost_usd: apiBudget.estimatedSocialGraphCostUsd,
             estimated_max_run_cost_usd: apiBudget.estimatedMaxRunCostUsd,
             social_graph_max_items: socialGraphMaxItems ?? null,
+            include_media: shouldIncludeMedia,
           },
         },
+        retention:
+          retention?.mode === 'guest_30d' && retention.expiresAtIso
+            ? {
+                mode: 'guest_30d',
+                expires_at: retention.expiresAtIso,
+              }
+            : {
+                mode: 'account',
+              },
         storage: {
           media_bytes: 0,
           archive_bytes: 0,
@@ -563,7 +653,7 @@ export async function processSnapshotScrapeJob(params: {
     await syncLiveMetrics({ phase: totalMediaWorkItems > 0 ? 'media' : 'finalizing' })
     await ensureSnapshotJobNotCancelled(jobId)
 
-    if (targets.profile) {
+    if (shouldIncludeMedia && targets.profile) {
       await processScrapedProfileMedia(
         userId,
         insertedBackup.id,
@@ -577,7 +667,7 @@ export async function processSnapshotScrapeJob(params: {
       )
     }
 
-    if (tweetMediaCount > 0) {
+    if (shouldIncludeMedia && tweetMediaCount > 0) {
       await processScrapedMedia(
         userId,
         insertedBackup.id,
@@ -618,10 +708,42 @@ export async function processSnapshotScrapeJob(params: {
     await ensureSnapshotJobNotCancelled(jobId)
     await recalculateAndPersistBackupStorage(supabase, insertedBackup.id)
 
+    const reminderPayloadPatch: Record<string, unknown> = {}
+    try {
+      const latestJob = await getBackupJobForUser(supabase, jobId, userId)
+      const latestPayload = toRecord(latestJob?.payload)
+      const reminderEmail = readTrimmed(latestPayload.reminder_email).toLowerCase()
+      const reminderAlreadySent = readTrimmed(latestPayload.reminder_delivery_status) === 'sent'
+
+      if (!reminderAlreadySent && EMAIL_PATTERN.test(reminderEmail)) {
+        const appBaseUrl = resolveConfiguredAppBaseUrl()
+        if (!appBaseUrl) {
+          reminderPayloadPatch.reminder_delivery_status = 'failed'
+          reminderPayloadPatch.reminder_error =
+            'APP_BASE_URL (or NEXTAUTH_URL / NEXT_PUBLIC_APP_URL) is required for reminder emails.'
+        } else {
+          const delivery = await sendBackupReadyEmail({
+            email: reminderEmail,
+            backupId: insertedBackup.id,
+            appBaseUrl,
+          })
+          reminderPayloadPatch.reminder_delivery_status = 'sent'
+          reminderPayloadPatch.reminder_sent_at = new Date().toISOString()
+          reminderPayloadPatch.reminder_error = null
+          reminderPayloadPatch.reminder_share_url = delivery.shareUrl
+        }
+      }
+    } catch (reminderError) {
+      reminderPayloadPatch.reminder_delivery_status = 'failed'
+      reminderPayloadPatch.reminder_error =
+        reminderError instanceof Error ? reminderError.message : 'Failed to send reminder email.'
+    }
+
     await mergeBackupJobPayload(supabase, jobId, {
       lifecycle_state: 'completed',
       partial_backup_id: null,
       live_metrics: liveMetrics,
+      ...reminderPayloadPatch,
       apify_runs: {
         timeline_run_id: null,
         social_graph_run_id: null,

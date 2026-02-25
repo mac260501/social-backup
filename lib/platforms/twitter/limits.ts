@@ -35,17 +35,22 @@ export const USER_STORAGE_LIMITS = {
 }
 
 export const TWITTER_SCRAPE_LIMITS = {
-  defaultTweets: readPositiveIntEnv('TWITTER_SCRAPE_DEFAULT_TWEETS', 500),
+  defaultTweets: readPositiveIntEnv('TWITTER_SCRAPE_DEFAULT_TWEETS', 5_000),
+  maxTweetsAndReplies: readPositiveIntEnv('TWITTER_SCRAPE_FREE_MAX_TWEETS_AND_REPLIES', 5_000),
+  maxFollowersAndFollowing: readPositiveIntEnv('TWITTER_SCRAPE_FREE_MAX_FOLLOWERS_AND_FOLLOWING', 50_000),
 }
 
 export const TWITTER_SCRAPE_API_LIMITS = {
   // Apify pricing defaults from actor pages:
   // - apidojo/twitter-profile-scraper: $0.016 per profile query + $0.0004 per result item after first 40
-  // - apidojo/twitter-user-scraper: $0.40 per 1,000 users ($0.0004 each)
+  // - kaitoeasyapi/premium-x-follower-scraper-following-data: typically $0.10 per 1,000 users ($0.0001 each)
   profileQueryBaseUsd: readPositiveFloatEnv('TWITTER_APIFY_PROFILE_QUERY_BASE_USD', 0.016),
   profileIncludedItems: readPositiveIntEnv('TWITTER_APIFY_PROFILE_INCLUDED_ITEMS', 40),
   profileExtraItemUsd: readPositiveFloatEnv('TWITTER_APIFY_PROFILE_EXTRA_ITEM_USD', 0.0004),
-  socialGraphItemUsd: readPositiveFloatEnv('TWITTER_APIFY_USER_ITEM_USD', 0.0004),
+  socialGraphItemUsd: readPositiveFloatEnv(
+    'TWITTER_APIFY_SOCIAL_GRAPH_ITEM_USD',
+    readPositiveFloatEnv('TWITTER_APIFY_USER_ITEM_USD', 0.0001),
+  ),
   maxCostPerRunUsd: readPositiveFloatEnv('TWITTER_SCRAPE_API_MAX_COST_PER_RUN_USD', 25),
   maxCostPerMonthUsd: readPositiveFloatEnv('TWITTER_SCRAPE_API_MAX_COST_PER_MONTH_USD', 20),
 }

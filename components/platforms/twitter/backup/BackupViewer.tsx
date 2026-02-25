@@ -67,6 +67,7 @@ interface BackupProfile {
   displayName?: string
   name?: string
   username?: string
+  bio?: string
   description?: string
   profileImageUrl?: string
   profile_image_url_https?: string
@@ -700,7 +701,7 @@ export function BackupViewer({ backup }: BackupViewerProps) {
   const displayName =
     backup.data?.profile?.displayName || backup.data?.profile?.name || backup.data?.profile?.username || 'Archived Account'
   const username = backup.data?.profile?.username || 'unknown'
-  const profileBio = backup.data?.profile?.description || 'Archived profile from Social Backup.'
+  const profileBio = backup.data?.profile?.description || backup.data?.profile?.bio || 'Archived profile from Social Backup.'
 
   const createdAt = backup.uploaded_at || backup.created_at
   const isArchiveBackup = isArchiveBackupRecord(backup)

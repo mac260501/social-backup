@@ -9,9 +9,12 @@ export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   })
+
   const pathname = request.nextUrl.pathname
   const isPublicPath =
     pathname === '/' ||
+    pathname.startsWith('/shared/') ||
+    pathname.startsWith('/dashboard/backup/') ||
     pathname === '/login' ||
     pathname === '/signup' ||
     pathname === '/privacy' ||

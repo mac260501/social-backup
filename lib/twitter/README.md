@@ -136,7 +136,7 @@ Claude Code needs to:
 1. Install Apify SDK: `npm install apify-client`
 2. Implement the provider methods in `apify-provider.ts`:
    - `scrapeTweets()` / `scrapeReplies()` / `scrapeProfile()` via `apidojo/twitter-profile-scraper`
-   - `scrapeFollowers()` / `scrapeFollowing()` via `apidojo/twitter-user-scraper`
+   - `scrapeFollowers()` / `scrapeFollowing()` via `kaitoeasyapi/premium-x-follower-scraper-following-data`
 3. Create API endpoint `app/api/platforms/twitter/scrape/route.ts` that uses `getTwitterProvider()`
 4. Add "Backup Now" button to dashboard that calls this API
 5. Display scrape results and cost to user

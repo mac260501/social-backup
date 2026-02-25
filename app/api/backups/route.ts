@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient as createServerClient } from '@/lib/supabase/server'
 import { findActiveBackupJobForUser, listBackupJobsForUser } from '@/lib/jobs/backup-jobs'
 import { USER_STORAGE_LIMITS } from '@/lib/platforms/twitter/limits'
 import { getTwitterApiUsageSummary } from '@/lib/platforms/twitter/api-usage'
+import { deleteBackupAndStorageById } from '@/lib/backups/delete-backup-data'
+import { isGuestBackupExpired } from '@/lib/backups/retention'
+import { getRequestActorId } from '@/lib/request-actor'
 import { calculateUserStorageSummary } from '@/lib/storage/usage'
 
 const supabase = createAdminClient()
@@ -22,13 +24,8 @@ function asNonEmptyString(value: unknown): string | null {
 
 export async function GET(request: Request) {
   try {
-    const authClient = await createServerClient()
-    const {
-      data: { user },
-      error: authError
-    } = await authClient.auth.getUser()
-
-    if (authError || !user) {
+    const actorId = await getRequestActorId()
+    if (!actorId) {
       return NextResponse.json({
         success: false,
         error: 'Unauthorized'
@@ -39,8 +36,8 @@ export async function GET(request: Request) {
     const userId = searchParams.get('userId')
 
     // Keep backward compatibility with callers that still send userId.
-    if (userId && userId !== user.id) {
-      console.warn(`[Security] User ${user.id} attempted to fetch backups for user ${userId}`)
+    if (userId && userId !== actorId) {
+      console.warn(`[Security] User ${actorId} attempted to fetch backups for user ${userId}`)
       return NextResponse.json({
         success: false,
         error: 'Forbidden - you can only access your own backups'
@@ -48,17 +45,17 @@ export async function GET(request: Request) {
     }
 
     // Reconcile stale queued jobs before loading dashboard payload.
-    await findActiveBackupJobForUser(supabase, user.id)
+    await findActiveBackupJobForUser(supabase, actorId)
 
     const [{ data, error }, jobs, storageSummary, apiUsage] = await Promise.all([
       supabase
         .from('backups')
         .select('*')
-        .eq('user_id', user.id)
+        .eq('user_id', actorId)
         .order('uploaded_at', { ascending: false }),
-      listBackupJobsForUser(supabase, user.id, 20),
-      calculateUserStorageSummary(supabase, user.id),
-      getTwitterApiUsageSummary(supabase, user.id),
+      listBackupJobsForUser(supabase, actorId, 20),
+      calculateUserStorageSummary(supabase, actorId),
+      getTwitterApiUsageSummary(supabase, actorId),
     ])
 
     if (error) {
@@ -78,10 +75,26 @@ export async function GET(request: Request) {
       if (resultBackupId) hiddenBackupIds.add(resultBackupId)
     }
     const visibleBackups = (data || []).filter((backup) => !hiddenBackupIds.has(String(backup.id)))
+    const nowMs = Date.now()
+    const nonExpiredBackups: typeof visibleBackups = []
+    for (const backup of visibleBackups) {
+      if (isGuestBackupExpired(backup.data, nowMs)) {
+        try {
+          await deleteBackupAndStorageById(supabase, {
+            backupId: String(backup.id),
+            expectedUserId: actorId,
+          })
+        } catch (cleanupError) {
+          console.error(`[Backups API] Failed to delete expired backup ${backup.id}:`, cleanupError)
+        }
+        continue
+      }
+      nonExpiredBackups.push(backup)
+    }
 
     return NextResponse.json({
       success: true,
-      backups: visibleBackups,
+      backups: nonExpiredBackups,
       jobs,
       storage: {
         ...storageSummary,

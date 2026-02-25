@@ -117,6 +117,7 @@ export interface TwitterScrapeResult {
     profileImageUrl?: string
     coverImageUrl?: string
     displayName?: string
+    profileBio?: string
     profileFollowersCount?: number
     profileFollowingCount?: number
     profileStatusesCount?: number

@@ -10,6 +10,17 @@ function isSafeRelativePath(path: string | null): path is string {
   return Boolean(path && path.startsWith('/') && !path.startsWith('//'))
 }
 
+function readMetadataFullName(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined
+  const record = metadata as Record<string, unknown>
+  const fullName =
+    (typeof record.full_name === 'string' && record.full_name.trim())
+    || (typeof record.name === 'string' && record.name.trim())
+    || (typeof record.display_name === 'string' && record.display_name.trim())
+    || ''
+  return fullName || undefined
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -32,22 +43,40 @@ export default function LoginPage() {
       // Keep auth UX clean even if notification delivery fails.
     }
   }, [])
+  const claimAnonymousBackups = useCallback(async () => {
+    try {
+      await fetch('/api/backups/claim', {
+        method: 'POST',
+        keepalive: true,
+      })
+    } catch {
+      // Keep auth UX clean even if claim fails.
+    }
+  }, [])
 
   useEffect(() => {
     const handleAuthState = async () => {
       const requestedNext = searchParams.get('next')
       const nextPath = isSafeRelativePath(requestedNext) ? requestedNext : '/dashboard'
+      const code = searchParams.get('code')
 
       const {
         data: { user: existingUser },
       } = await supabase.auth.getUser()
 
       if (existingUser) {
+        if (code && existingUser.id && existingUser.email) {
+          void notifyNewSignup({
+            userId: existingUser.id,
+            email: existingUser.email,
+            fullName: readMetadataFullName(existingUser.user_metadata),
+          })
+        }
+        await claimAnonymousBackups()
         router.replace(nextPath)
         return
       }
 
-      const code = searchParams.get('code')
       if (!code) return
 
       setLoading(true)
@@ -75,20 +104,12 @@ export default function LoginPage() {
         data: { user: exchangedUser },
       } = await supabase.auth.getUser()
       if (exchangedUser?.id && exchangedUser.email) {
-        const metadata =
-          exchangedUser.user_metadata && typeof exchangedUser.user_metadata === 'object' && !Array.isArray(exchangedUser.user_metadata)
-            ? (exchangedUser.user_metadata as Record<string, unknown>)
-            : {}
-        const fullName =
-          (typeof metadata.full_name === 'string' && metadata.full_name.trim()) ||
-          (typeof metadata.name === 'string' && metadata.name.trim()) ||
-          (typeof metadata.display_name === 'string' && metadata.display_name.trim()) ||
-          undefined
         void notifyNewSignup({
           userId: exchangedUser.id,
           email: exchangedUser.email,
-          fullName,
+          fullName: readMetadataFullName(exchangedUser.user_metadata),
         })
+        await claimAnonymousBackups()
       }
 
       router.replace(nextPath)
@@ -96,7 +117,7 @@ export default function LoginPage() {
     }
 
     handleAuthState()
-  }, [notifyNewSignup, router, searchParams, supabase])
+  }, [claimAnonymousBackups, notifyNewSignup, router, searchParams, supabase])
 
   const handleEmailLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -121,6 +142,7 @@ export default function LoginPage() {
       return
     }
 
+    await claimAnonymousBackups()
     router.push('/dashboard')
     router.refresh()
   }

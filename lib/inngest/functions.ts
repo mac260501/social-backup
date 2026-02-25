@@ -1,5 +1,6 @@
 import type { TwitterScrapeTargets } from '@/lib/twitter/types'
 import { inngest } from '@/lib/inngest/client'
+import { cleanupExpiredGuestBackups } from '@/lib/backups/guest-retention-cleanup'
 import type { ArchiveImportSelection, DmEncryptionUploadMetadata } from '@/lib/platforms/twitter/archive-import'
 import { processArchiveUploadJob } from '@/lib/platforms/twitter/archive-upload-job'
 import { processSnapshotScrapeJob } from '@/lib/platforms/twitter/snapshot-scrape-job'
@@ -49,6 +50,11 @@ export const snapshotScrapeProcessor = inngest.createFunction(
         username: string
         tweetsToScrape: number
         targets: TwitterScrapeTargets
+        includeMedia?: boolean
+        retention?: {
+          mode: 'account' | 'guest_30d'
+          expiresAtIso: string | null
+        }
         socialGraphMaxItems?: number
         apifyWebhook?: {
           baseUrl: string
@@ -72,6 +78,8 @@ export const snapshotScrapeProcessor = inngest.createFunction(
         username: payload.username,
         tweetsToScrape: payload.tweetsToScrape,
         targets: payload.targets,
+        includeMedia: payload.includeMedia,
+        retention: payload.retention,
         socialGraphMaxItems: payload.socialGraphMaxItems,
         apifyWebhook: payload.apifyWebhook,
         apiBudget: payload.apiBudget,
@@ -80,4 +88,18 @@ export const snapshotScrapeProcessor = inngest.createFunction(
   },
 )
 
-export const inngestFunctions = [archiveUploadProcessor, snapshotScrapeProcessor]
+export const guestRetentionCleanup = inngest.createFunction(
+  {
+    id: 'guest-retention-cleanup',
+    retries: 1,
+  },
+  { cron: 'TZ=UTC 0 4 * * *' },
+  async ({ step }) => {
+    await step.run('cleanup-expired-guest-backups', async () => {
+      const deletedCount = await cleanupExpiredGuestBackups(500)
+      return { deletedCount }
+    })
+  },
+)
+
+export const inngestFunctions = [archiveUploadProcessor, snapshotScrapeProcessor, guestRetentionCleanup]
