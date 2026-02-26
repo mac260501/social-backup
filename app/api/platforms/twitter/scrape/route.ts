@@ -186,7 +186,17 @@ export async function POST(request: Request) {
     if (!username) {
       return NextResponse.json({ success: false, error: 'Username is required' }, { status: 400 })
     }
-    if (typeof username !== 'string' || !TWITTER_USERNAME_PATTERN.test(username)) {
+    if (typeof username !== 'string') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid username format. Use 1-15 letters, numbers, or underscores.',
+        },
+        { status: 400 },
+      )
+    }
+    const normalizedUsername = username.trim()
+    if (!TWITTER_USERNAME_PATTERN.test(normalizedUsername)) {
       return NextResponse.json(
         {
           success: false,
@@ -278,6 +288,29 @@ export async function POST(request: Request) {
         { status: 500 },
       )
     }
+    if (typeof twitter.validateUsername === 'function') {
+      try {
+        const usernameValidation = await twitter.validateUsername(normalizedUsername)
+        if (!usernameValidation.exists) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'This username does not exist on X.',
+            },
+            { status: 404 },
+          )
+        }
+      } catch (validationError) {
+        console.error('[Scrape API] Username validation failed:', validationError)
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Unable to verify that username right now. Please try again.',
+          },
+          { status: 503 },
+        )
+      }
+    }
 
     const effectiveRunBudgetUsd = roundUsd(TWITTER_SCRAPE_API_LIMITS.maxCostPerRunUsd)
 
@@ -367,7 +400,7 @@ export async function POST(request: Request) {
       message: 'Snapshot requested. Waiting to start...',
       payload: {
         lifecycle_state: 'queued',
-        username: username.trim(),
+        username: normalizedUsername,
         max_tweets: tweetsToScrape,
         targets: parsedTargets,
         include_media: parsedIncludeMedia,
@@ -415,7 +448,7 @@ export async function POST(request: Request) {
         details: [
           { label: 'Actor ID', value: actorId },
           { label: 'Job ID', value: job.id },
-          { label: 'Username', value: username.trim() },
+          { label: 'Username', value: normalizedUsername },
           { label: 'Targets', value: describeEnabledTargets(parsedTargets) },
           { label: 'Include media', value: parsedIncludeMedia ? 'yes' : 'no' },
           { label: 'Retention mode', value: retention.mode },
@@ -432,7 +465,7 @@ export async function POST(request: Request) {
         data: {
           jobId: job.id,
           userId: actorId,
-          username: username.trim(),
+          username: normalizedUsername,
           tweetsToScrape,
           targets: parsedTargets,
           includeMedia: parsedIncludeMedia,

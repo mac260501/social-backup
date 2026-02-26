@@ -78,6 +78,7 @@ const APIFY_TERMINAL_WEBHOOK_EVENTS = [
 ] as const
 const KAITO_RELATION_MIN_ITEMS = 200
 const KAITO_RELATION_DEFAULT_ITEMS = 100_000
+const USERNAME_VALIDATION_MAX_ITEMS = 5
 
 type TimelineProgress = {
   tweets: number
@@ -158,6 +159,57 @@ export class ApifyProvider implements TwitterProvider {
     // Pull a minimal page to obtain author-level profile metadata.
     const result = await this.scrapeTimeline(username, 1)
     return result.profile
+  }
+
+  async validateUsername(username: string): Promise<{ exists: boolean; reason?: string }> {
+    if (!this.isConfigured()) {
+      throw new Error('Apify API key not configured')
+    }
+
+    const requested = this.normalizeHandle(username)
+    if (!requested) {
+      return { exists: false, reason: 'invalid_username' }
+    }
+
+    const run = await this.client.actor(this.fallbackProfileActorId).start(
+      {
+        twitterHandles: [requested],
+        getFollowers: true,
+        getFollowing: false,
+        includeUnavailableUsers: true,
+        maxItems: USERNAME_VALIDATION_MAX_ITEMS,
+      },
+    )
+
+    if (!run.id || !run.defaultDatasetId) {
+      throw new Error('Username validation actor did not return run metadata.')
+    }
+
+    const polled = await this.pollRunDatasetItems({
+      runId: run.id,
+      datasetId: run.defaultDatasetId,
+      maxItems: Math.max(10, USERNAME_VALIDATION_MAX_ITEMS * 5),
+    })
+
+    if (polled.finalStatus !== 'SUCCEEDED') {
+      throw new Error(`Username validation actor finished with status ${polled.finalStatus}.`)
+    }
+
+    const owner = this.findOwnerUser(polled.items, requested)
+    if (!owner) {
+      return { exists: false, reason: 'not_found' }
+    }
+
+    const unavailable = owner.isUnavailable === true || owner.unavailable === true
+    const suspended = owner.isSuspended === true || owner.suspended === true
+    if (unavailable) {
+      return { exists: false, reason: 'unavailable' }
+    }
+    if (suspended) {
+      return { exists: false, reason: 'suspended' }
+    }
+
+    return { exists: true }
   }
 
   async scrapeAll(username: string, maxTweets: number = 3200, options?: TwitterScrapeOptions): Promise<TwitterScrapeResult> {

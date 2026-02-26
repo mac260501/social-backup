@@ -6,6 +6,12 @@ import { Tweet, Follower, Following, TwitterScrapeOptions, TwitterScrapeResult }
  */
 export interface TwitterProvider {
   /**
+   * Validate that a username exists before starting a full scrape run.
+   * Providers that cannot validate should omit this method.
+   */
+  validateUsername?(username: string): Promise<{ exists: boolean; reason?: string }>
+
+  /**
    * Scrape tweets from a user's timeline
    * @param username - Twitter username (without @)
    * @param maxTweets - Maximum number of tweets to fetch
