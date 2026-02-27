@@ -521,7 +521,7 @@ export default function HomePage() {
           <span>{isDark ? 'Light' : 'Dark'}</span>
         </button>
 
-        <AppModeTabs activeMode={activeMode} saveHref="/" scanHref="/?tab=scan" className="mb-1" />
+        <AppModeTabs activeMode={activeMode} saveHref="/" scanHref="/?tab=scan" className="mb-5 sm:mb-6" />
 
         {activeMode === 'save' ? (
           <div className="flex w-full flex-col items-center gap-5">
@@ -734,7 +734,17 @@ export default function HomePage() {
             )}
           </div>
         ) : (
-          <ScanComingSoonPanel className="mt-2" />
+          <div className="flex w-full flex-col items-center gap-5">
+            <Image
+              src="/logo.png"
+              alt="Social Backup logo"
+              width={596}
+              height={366}
+              priority
+              className="h-auto w-40 sm:w-44"
+            />
+            <ScanComingSoonPanel className="mt-1" />
+          </div>
         )}
       </section>
 
