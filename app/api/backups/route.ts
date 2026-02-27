@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { findActiveBackupJobForUser, listBackupJobsForUser } from '@/lib/jobs/backup-jobs'
-import { USER_STORAGE_LIMITS } from '@/lib/platforms/twitter/limits'
+import { TWITTER_SCRAPE_LIMITS, USER_STORAGE_LIMITS } from '@/lib/platforms/twitter/limits'
 import { getTwitterApiUsageSummary } from '@/lib/platforms/twitter/api-usage'
 import { deleteBackupAndStorageById } from '@/lib/backups/delete-backup-data'
 import { isGuestBackupExpired } from '@/lib/backups/retention'
@@ -102,6 +102,10 @@ export async function GET(request: Request) {
         remainingBytes: Math.max(0, USER_STORAGE_LIMITS.maxTotalBytes - storageSummary.totalBytes),
       },
       apiUsage,
+      scrapeLimits: {
+        maxTweetsAndReplies: TWITTER_SCRAPE_LIMITS.maxTweetsAndReplies,
+        maxFollowersAndFollowing: TWITTER_SCRAPE_LIMITS.maxFollowersAndFollowing,
+      },
     })
 
   } catch (error) {

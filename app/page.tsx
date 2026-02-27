@@ -1,8 +1,11 @@
 'use client'
 
 import Image from 'next/image'
+import { useSearchParams } from 'next/navigation'
 import { ExternalLink, Moon, Sun } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
+import { AppModeTabs } from '@/components/app-mode-tabs'
+import { ScanComingSoonPanel } from '@/components/scan-coming-soon-panel'
 
 type BackupJob = {
   id: string
@@ -129,6 +132,7 @@ function formatEta(seconds: number): string {
 }
 
 export default function HomePage() {
+  const searchParams = useSearchParams()
   const [username, setUsername] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
@@ -155,6 +159,7 @@ export default function HomePage() {
   const [reminderStatus, setReminderStatus] = useState<'idle' | 'saving' | 'saved' | 'sent' | 'error'>('idle')
   const [keepJobRunningOnClose, setKeepJobRunningOnClose] = useState(false)
   const [canceling, setCanceling] = useState(false)
+  const activeMode = searchParams.get('tab') === 'scan' ? 'scan' : 'save'
 
   useEffect(() => {
     setIsDark(document.documentElement.classList.contains('dark'))
@@ -516,215 +521,221 @@ export default function HomePage() {
           <span>{isDark ? 'Light' : 'Dark'}</span>
         </button>
 
-        <div className="flex w-full flex-col items-center gap-5">
-          <Image
-            src="/logo.png"
-            alt="Social Backup logo"
-            width={596}
-            height={366}
-            priority
-            className="h-auto w-40 sm:w-44"
-          />
+        <AppModeTabs activeMode={activeMode} saveHref="/" scanHref="/?tab=scan" className="mb-1" />
 
-          <p className="text-xs font-semibold uppercase tracking-[0.26em] text-neutral-600 dark:text-neutral-400">
-            Social Backup
-          </p>
-
-          <h1 className="max-w-4xl text-3xl font-bold tracking-tight sm:text-5xl md:text-6xl">
-            Back up your X account
-          </h1>
-
-          <p className="max-w-3xl text-base text-neutral-600 dark:text-neutral-300 sm:text-2xl">
-            Just drop in a username.
-          </p>
-
-          <p className="max-w-2xl text-xs text-neutral-500 dark:text-neutral-400 sm:text-sm">
-            X-style viewer, private link valid for 30 days, and tweets, replies, media, followers, and following included.
-          </p>
-
-          <form onSubmit={handleSubmit} className="mt-7 flex w-full max-w-md flex-row items-stretch gap-2">
-            <label htmlFor="username" className="sr-only">
-              X username
-            </label>
-            <input
-              id="username"
-              name="username"
-              type="text"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="@username"
-              autoComplete="off"
-              style={{
-                fontFamily:
-                  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-              }}
-              className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-blue-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-blue-400"
+        {activeMode === 'save' ? (
+          <div className="flex w-full flex-col items-center gap-5">
+            <Image
+              src="/logo.png"
+              alt="Social Backup logo"
+              width={596}
+              height={366}
+              priority
+              className="h-auto w-40 sm:w-44"
             />
-            <button
-              type="submit"
-              disabled={submitting}
-              className="shrink-0 whitespace-nowrap rounded-xl bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300"
-            >
-              {submitting ? 'Starting...' : 'Get Backup'}
-            </button>
-          </form>
 
-          <div className="mb-6 flex flex-col items-center gap-1">
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">No sign up required.</p>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Want to keep it?{' '}
-              <a href="/signup" className="font-medium text-blue-600 hover:underline dark:text-blue-400">
-                Create a free account.
-              </a>
+            <p className="text-xs font-semibold uppercase tracking-[0.26em] text-neutral-600 dark:text-neutral-400">
+              Social Backup
             </p>
-          </div>
 
-          <details className="mt-6 inline-block w-fit rounded-xl border border-neutral-300/80 bg-white/60 px-3 py-2 text-left text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900/50 dark:text-neutral-300">
-            <summary className="cursor-pointer select-none font-semibold">Customize download</summary>
-            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
-              {(
-                [
-                  ['tweets', 'Tweets'],
-                  ['replies', 'Replies'],
-                  ['media', 'Media'],
-                  ['followers', 'Followers'],
-                  ['following', 'Following'],
-                ] as const
-              ).map(([key, label]) => (
-                <label key={key} className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={downloadSelection[key]}
-                    onChange={(event) =>
-                      setDownloadSelection((current) => ({
-                        ...current,
-                        [key]: event.target.checked,
-                      }))
-                    }
-                    className="h-3.5 w-3.5 accent-blue-600"
-                  />
-                  <span>{label}</span>
-                </label>
-              ))}
-            </div>
-          </details>
+            <h1 className="max-w-4xl text-3xl font-bold tracking-tight sm:text-5xl md:text-6xl">
+              Back up your X account
+            </h1>
 
-          <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            Current limits for free users: up to 5,000 tweets + replies combined and 50,000 followers + following combined.
-          </p>
+            <p className="max-w-3xl text-base text-neutral-600 dark:text-neutral-300 sm:text-2xl">
+              Just drop in a username.
+            </p>
 
-          {phase === 'running' && (
-            <div className="mt-3 w-full max-w-2xl rounded-2xl border border-neutral-300 bg-white/80 p-4 text-left dark:border-neutral-700 dark:bg-neutral-900/80">
-              <div className="mb-2 flex items-center justify-between text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-                <span>{statusMessage || 'Scraping in progress...'}</span>
-                <span>{progress}%</span>
-              </div>
-              <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
-                {etaLabel ? `Estimated time remaining: ~${etaLabel}` : 'Estimated time remaining: calculating...'}
+            <p className="max-w-2xl text-xs text-neutral-500 dark:text-neutral-400 sm:text-sm">
+              X-style viewer, private link valid for 30 days, and tweets, replies, media, followers, and following included.
+            </p>
+
+            <form onSubmit={handleSubmit} className="mt-7 flex w-full max-w-md flex-row items-stretch gap-2">
+              <label htmlFor="username" className="sr-only">
+                X username
+              </label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="@username"
+                autoComplete="off"
+                style={{
+                  fontFamily:
+                    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                }}
+                className="min-w-0 flex-1 rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-blue-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-blue-400"
+              />
+              <button
+                type="submit"
+                disabled={submitting}
+                className="shrink-0 whitespace-nowrap rounded-xl bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300"
+              >
+                {submitting ? 'Starting...' : 'Get Backup'}
+              </button>
+            </form>
+
+            <div className="mb-6 flex flex-col items-center gap-1">
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">No sign up required.</p>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                Want to keep it?{' '}
+                <a href="/signup" className="font-medium text-blue-600 hover:underline dark:text-blue-400">
+                  Create a free account.
+                </a>
               </p>
-              <div className="h-2.5 w-full rounded-full bg-neutral-200 dark:bg-neutral-800">
-                <div
-                  className="h-2.5 rounded-full bg-blue-600 transition-all duration-500 dark:bg-blue-500"
-                  style={{ width: `${Math.max(4, progress)}%` }}
-                />
-              </div>
-              <div className="mt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => void handleCancelScrape()}
-                  disabled={canceling}
-                  className="text-xs font-medium text-neutral-500 transition hover:text-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-neutral-400 dark:hover:text-neutral-200"
-                >
-                  {canceling ? 'Cancelling...' : 'Cancel scrape'}
-                </button>
-              </div>
+            </div>
 
-              {showEmailReminderOption && (
-                <form onSubmit={handleReminderSubmit} className="mt-3 flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white/70 p-3 dark:border-neutral-800 dark:bg-neutral-900/70">
-                  <p className="text-xs text-neutral-600 dark:text-neutral-300">
-                    Hmm, seems to be taking longer than usual, possibly due to the size of the account. Would you like us to email you the link when it&apos;s done?
-                  </p>
-                  <div className="flex flex-col gap-2 sm:flex-row">
+            <details className="mt-6 inline-block w-fit rounded-xl border border-neutral-300/80 bg-white/60 px-3 py-2 text-left text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900/50 dark:text-neutral-300">
+              <summary className="cursor-pointer select-none font-semibold">Customize download</summary>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2">
+                {(
+                  [
+                    ['tweets', 'Tweets'],
+                    ['replies', 'Replies'],
+                    ['media', 'Media'],
+                    ['followers', 'Followers'],
+                    ['following', 'Following'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="inline-flex items-center gap-2">
                     <input
-                      type="email"
-                      value={reminderEmail}
-                      onChange={(event) => {
-                        setReminderEmail(event.target.value)
-                        if (reminderStatus !== 'idle') {
-                          setReminderStatus('idle')
-                        }
-                      }}
-                      placeholder="you@example.com"
-                      autoComplete="email"
-                      className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-blue-600 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-blue-400"
+                      type="checkbox"
+                      checked={downloadSelection[key]}
+                      onChange={(event) =>
+                        setDownloadSelection((current) => ({
+                          ...current,
+                          [key]: event.target.checked,
+                        }))
+                      }
+                      className="h-3.5 w-3.5 accent-blue-600"
                     />
-                    <button
-                      type="submit"
-                      disabled={reminderStatus === 'saving' || reminderStatus === 'saved' || reminderStatus === 'sent'}
-                      className="whitespace-nowrap rounded-lg bg-neutral-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300"
-                    >
-                      {reminderStatus === 'sent' ? 'Email sent' : reminderStatus === 'saved' ? 'Saved' : reminderStatus === 'saving' ? 'Saving...' : 'Notify me'}
-                    </button>
-                  </div>
-                  {(reminderStatus === 'saved' || reminderStatus === 'sent') && (
-                    <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                      {reminderStatus === 'sent'
-                        ? 'Backup was already ready. Email sent.'
-                        : 'Saved. We&apos;ll send the link once the backup is ready.'}
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </details>
+
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Current limits for free users: up to 5,000 tweets + replies combined and 50,000 followers + following combined.
+            </p>
+
+            {phase === 'running' && (
+              <div className="mt-3 w-full max-w-2xl rounded-2xl border border-neutral-300 bg-white/80 p-4 text-left dark:border-neutral-700 dark:bg-neutral-900/80">
+                <div className="mb-2 flex items-center justify-between text-sm font-semibold text-neutral-700 dark:text-neutral-300">
+                  <span>{statusMessage || 'Scraping in progress...'}</span>
+                  <span>{progress}%</span>
+                </div>
+                <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
+                  {etaLabel ? `Estimated time remaining: ~${etaLabel}` : 'Estimated time remaining: calculating...'}
+                </p>
+                <div className="h-2.5 w-full rounded-full bg-neutral-200 dark:bg-neutral-800">
+                  <div
+                    className="h-2.5 rounded-full bg-blue-600 transition-all duration-500 dark:bg-blue-500"
+                    style={{ width: `${Math.max(4, progress)}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void handleCancelScrape()}
+                    disabled={canceling}
+                    className="text-xs font-medium text-neutral-500 transition hover:text-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-neutral-400 dark:hover:text-neutral-200"
+                  >
+                    {canceling ? 'Cancelling...' : 'Cancel scrape'}
+                  </button>
+                </div>
+
+                {showEmailReminderOption && (
+                  <form onSubmit={handleReminderSubmit} className="mt-3 flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white/70 p-3 dark:border-neutral-800 dark:bg-neutral-900/70">
+                    <p className="text-xs text-neutral-600 dark:text-neutral-300">
+                      Hmm, seems to be taking longer than usual, possibly due to the size of the account. Would you like us to email you the link when it&apos;s done?
                     </p>
-                  )}
-                  {reminderEmailError && (
-                    <p className="text-xs font-medium text-red-600 dark:text-red-400">{reminderEmailError}</p>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="email"
+                        value={reminderEmail}
+                        onChange={(event) => {
+                          setReminderEmail(event.target.value)
+                          if (reminderStatus !== 'idle') {
+                            setReminderStatus('idle')
+                          }
+                        }}
+                        placeholder="you@example.com"
+                        autoComplete="email"
+                        className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-blue-600 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100 dark:placeholder:text-neutral-500 dark:focus:border-blue-400"
+                      />
+                      <button
+                        type="submit"
+                        disabled={reminderStatus === 'saving' || reminderStatus === 'saved' || reminderStatus === 'sent'}
+                        className="whitespace-nowrap rounded-lg bg-neutral-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300"
+                      >
+                        {reminderStatus === 'sent' ? 'Email sent' : reminderStatus === 'saved' ? 'Saved' : reminderStatus === 'saving' ? 'Saving...' : 'Notify me'}
+                      </button>
+                    </div>
+                    {(reminderStatus === 'saved' || reminderStatus === 'sent') && (
+                      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                        {reminderStatus === 'sent'
+                          ? 'Backup was already ready. Email sent.'
+                          : 'Saved. We&apos;ll send the link once the backup is ready.'}
+                      </p>
+                    )}
+                    {reminderEmailError && (
+                      <p className="text-xs font-medium text-red-600 dark:text-red-400">{reminderEmailError}</p>
+                    )}
+                  </form>
+                )}
+              </div>
+            )}
+
+            {error && (
+              <p className="mt-1 text-sm font-medium text-red-600 dark:text-red-400">
+                {error}
+              </p>
+            )}
+
+            {phase === 'completed' && viewerUrl && (
+              <div className="mt-3 flex w-full max-w-md flex-col items-center gap-2">
+                <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Backup is ready.</p>
+                <a
+                  href={viewerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300"
+                >
+                  <span>Open Backup</span>
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+
+                <form onSubmit={handleCopyViaForm} className="mt-3 flex w-full flex-col gap-2">
+                  <p className="text-center text-xs text-neutral-600 dark:text-neutral-400">Link is valid for 30 days.</p>
+                  <button
+                    type="submit"
+                    disabled={!shareUrl}
+                    title={shareUrl || 'Generating link...'}
+                    className="w-full truncate rounded-xl border border-neutral-300 bg-white px-3 py-2 text-left text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  >
+                    {copyState === 'copied' ? 'Copied to clipboard' : shareUrl || 'Generating backup link...'}
+                  </button>
+                  {shareLinkError && (
+                    <p className="text-center text-xs font-medium text-red-600 dark:text-red-400">{shareLinkError}</p>
                   )}
                 </form>
-              )}
-            </div>
-          )}
 
-          {error && (
-            <p className="mt-1 text-sm font-medium text-red-600 dark:text-red-400">
-              {error}
-            </p>
-          )}
-
-          {phase === 'completed' && viewerUrl && (
-            <div className="mt-3 flex w-full max-w-md flex-col items-center gap-2">
-              <p className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Backup is ready.</p>
-              <a
-                href={viewerUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-300"
-              >
-                <span>Open Backup</span>
-                <ExternalLink className="h-4 w-4" />
-              </a>
-
-              <form onSubmit={handleCopyViaForm} className="mt-3 flex w-full flex-col gap-2">
-                <p className="text-center text-xs text-neutral-600 dark:text-neutral-400">Link is valid for 30 days.</p>
-                <button
-                  type="submit"
-                  disabled={!shareUrl}
-                  title={shareUrl || 'Generating link...'}
-                  className="w-full truncate rounded-xl border border-neutral-300 bg-white px-3 py-2 text-left text-xs font-medium text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                >
-                  {copyState === 'copied' ? 'Copied to clipboard' : shareUrl || 'Generating backup link...'}
-                </button>
-                {shareLinkError && (
-                  <p className="text-center text-xs font-medium text-red-600 dark:text-red-400">{shareLinkError}</p>
-                )}
-              </form>
-
-              <p className="mt-1 text-center text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                Or{' '}
-                <a href="/signup" className="font-semibold text-blue-600 hover:underline dark:text-blue-400">
-                  sign up
-                </a>{' '}
-                and you can access it here anytime, with more backup features.
-              </p>
-            </div>
-          )}
-        </div>
+                <p className="mt-1 text-center text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                  Or{' '}
+                  <a href="/signup" className="font-semibold text-blue-600 hover:underline dark:text-blue-400">
+                    sign up
+                  </a>{' '}
+                  and you can access it here anytime, with more backup features.
+                </p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <ScanComingSoonPanel className="mt-2" />
+        )}
       </section>
 
       <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-20 rounded-full border border-neutral-300 bg-white/85 px-3.5 py-1.5 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/80 dark:text-neutral-300">
