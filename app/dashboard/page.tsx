@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { ThemeLoadingScreen } from '@/components/theme-loading-screen'
 import { AppModeTabs } from '@/components/app-mode-tabs'
-import { ScanComingSoonPanel } from '@/components/scan-coming-soon-panel'
+import { TweetAnalyzerPanel } from '@/components/scanner/tweet-analyzer-panel'
 import {
   formatBackupMethodLabel,
   formatPartialReasonLabel,
@@ -1949,8 +1949,8 @@ export default function Dashboard() {
         <footer className="mt-10 text-center text-xs text-neutral-500 dark:text-neutral-400">© {new Date().getFullYear()} Social Backup</footer>
           </>
         ) : (
-          <section className="mx-auto mt-10 w-full max-w-3xl">
-            <ScanComingSoonPanel />
+          <section className="mx-auto mt-10 w-full max-w-5xl">
+            <TweetAnalyzerPanel />
           </section>
         )}
       </div>

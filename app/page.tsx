@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { ExternalLink, Moon, Sun } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { AppModeTabs } from '@/components/app-mode-tabs'
-import { ScanComingSoonPanel } from '@/components/scan-coming-soon-panel'
+import { TweetAnalyzerPanel } from '@/components/scanner/tweet-analyzer-panel'
 
 type BackupJob = {
   id: string
@@ -524,7 +524,7 @@ export default function HomePage() {
         <AppModeTabs activeMode={activeMode} saveHref="/" scanHref="/?tab=scan" className="mb-5 sm:mb-6" />
 
         {activeMode === 'save' ? (
-          <div className="flex w-full flex-col items-center gap-5">
+          <div className="flex w-full flex-col items-center gap-8">
             <Image
               src="/logo.png"
               alt="Social Backup logo"
@@ -743,7 +743,7 @@ export default function HomePage() {
               priority
               className="h-auto w-40 sm:w-44"
             />
-            <ScanComingSoonPanel className="mt-1" />
+            <TweetAnalyzerPanel />
           </div>
         )}
       </section>
